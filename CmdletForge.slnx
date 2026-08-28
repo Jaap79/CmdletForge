@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/CmdletForge/CmdletForge.csproj" />
+  <Project Path="tests/CmdletForge.Tests/CmdletForge.Tests.csproj" />
+</Solution>

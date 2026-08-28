@@ -1,0 +1,28 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [development, beta, main]
+  pull_request:
+    branches: [development, beta, main]
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build CmdletForge.slnx --configuration Release
+      - uses: github/codeql-action/analyze@v4

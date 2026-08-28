@@ -1,0 +1,54 @@
+<Window x:Class="CmdletForge.Views.UpdateWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Updates — Cmdlet Forge" Width="720" Height="470" MinWidth="620" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="UPDATECENTRUM" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="16" />
+    <TextBlock Grid.Row="1" Margin="0,6,0,16" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}"
+               Text="Controles worden alleen op verzoek uitgevoerd. Automatische app-installatie vereist een release-EXE én een passend SHA-256-bestand." />
+
+    <Border Grid.Row="2" Style="{StaticResource PanelBorder}" Padding="12" Margin="0,0,0,10">
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBlock Text="CMDLET FORGE" FontWeight="SemiBold" />
+          <TextBlock x:Name="AppStatus" Margin="0,5,0,0" Foreground="{DynamicResource TextMutedBrush}" Text="Nog niet gecontroleerd." />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal">
+          <Button x:Name="CheckAppButton" Content="Controleren" Click="CheckApp_Click" />
+          <Button x:Name="DownloadAppButton" Content="Download + controle" Style="{StaticResource PrimaryButton}" Margin="6,0,0,0" IsEnabled="False" Click="DownloadApp_Click" />
+          <Button x:Name="ApplyAppButton" Content="Installeren" Margin="6,0,0,0" IsEnabled="False" Click="ApplyApp_Click" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Border Grid.Row="3" Style="{StaticResource PanelBorder}" Padding="12">
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBlock Text="POWERSHELL" FontWeight="SemiBold" />
+          <TextBlock x:Name="PowerShellUpdateStatus" Margin="0,5,0,0" Foreground="{DynamicResource TextMutedBrush}" Text="Versie ophalen..." />
+        </StackPanel>
+        <Button Grid.Column="1" Content="Bijwerken via winget" Click="UpdatePowerShell_Click" />
+      </Grid>
+    </Border>
+
+    <TextBlock Grid.Row="4" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}"
+               Text="Module-updates staan in Beheer > PowerShell-modules. Per module zie je de geïnstalleerde en beschikbare versie; updates worden afzonderlijk bevestigd." />
+
+    <DockPanel Grid.Row="5" Margin="0,12,0,0">
+      <Button DockPanel.Dock="Right" Content="Sluiten" IsCancel="True" />
+      <ProgressBar x:Name="DownloadProgress" Height="8" Minimum="0" Maximum="100" Visibility="Collapsed" />
+    </DockPanel>
+  </Grid>
+</Window>

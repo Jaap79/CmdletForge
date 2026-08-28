@@ -1,0 +1,50 @@
+<Window x:Class="CmdletForge.Views.ModuleManagerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PowerShell-modules — Cmdlet Forge" Width="920" Height="610" MinWidth="760" MinHeight="480"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Text="POWERSHELL-MODULES" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="16" />
+    <TextBlock Grid.Row="1" Margin="0,6,0,14" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}"
+               Text="Installatie gebruikt PSResourceGet met PSGallery en Scope CurrentUser. Elke wijziging vereist afzonderlijke bevestiging. ActiveDirectory/RSAT is een Windows-capability en wordt hier niet als Gallery-module geïnstalleerd." />
+
+    <ListView x:Name="ModuleList" Grid.Row="2" SelectionMode="Single" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+      <ListView.View>
+        <GridView>
+          <GridViewColumn Header="Module" Width="225" DisplayMemberBinding="{Binding Name}" />
+          <GridViewColumn Header="Geïnstalleerd" Width="110" DisplayMemberBinding="{Binding InstalledVersion}" />
+          <GridViewColumn Header="Beschikbaar" Width="110" DisplayMemberBinding="{Binding AvailableVersion}" />
+          <GridViewColumn Header="Beschrijving" Width="390" DisplayMemberBinding="{Binding Description}" />
+        </GridView>
+      </ListView.View>
+    </ListView>
+
+    <Border Grid.Row="3" Style="{StaticResource PanelBorder}" Margin="0,12,0,0" Padding="10">
+      <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="InstallButton" Content="Installeren" Style="{StaticResource PrimaryButton}" Click="Install_Click" />
+          <Button x:Name="UpdateButton" Content="Bijwerken" Margin="6,0,0,0" Click="Update_Click" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Andere module" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,8,0" />
+          <TextBox x:Name="CustomModuleBox" Width="240" ToolTip="Exacte modulenaam uit PSGallery" />
+          <Button Content="Naam gebruiken" Margin="6,0,0,0" Click="UseCustom_Click" />
+        </StackPanel>
+      </DockPanel>
+    </Border>
+
+    <DockPanel Grid.Row="4" Margin="0,12,0,0">
+      <Button DockPanel.Dock="Right" Content="Sluiten" IsCancel="True" />
+      <Button DockPanel.Dock="Right" Content="Vernieuwen" Margin="0,0,6,0" Click="Refresh_Click" />
+      <TextBlock x:Name="StatusText" Text="Modules ophalen..." Foreground="{DynamicResource TextMutedBrush}" />
+    </DockPanel>
+  </Grid>
+</Window>

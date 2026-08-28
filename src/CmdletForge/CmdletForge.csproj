@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>CmdletForge</AssemblyName>
+    <RootNamespace>CmdletForge</RootNamespace>
+    <AssemblyTitle>Cmdlet Forge</AssemblyTitle>
+    <Description>Compact native PowerShell workbench for Windows.</Description>
+    <Company>Cubics</Company>
+    <Product>Cmdlet Forge</Product>
+    <Version>0.1.0</Version>
+    <ApplicationIcon>..\..\assets\cmdletforge.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+    <UpdateRepository Condition="'$(UpdateRepository)' == ''"></UpdateRepository>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
+    <PackageReference Include="System.Management.Automation" Version="7.6.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>UpdateRepository</_Parameter1>
+      <_Parameter2>$(UpdateRepository)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

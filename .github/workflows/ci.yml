@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [development, beta, main]
+  pull_request:
+    branches: [development, beta, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Restore
+        run: dotnet restore CmdletForge.slnx
+      - name: Build
+        run: dotnet build CmdletForge.slnx --configuration Release --no-restore -p:UpdateRepository=${{ github.repository }}
+      - name: Tests
+        run: dotnet run --project tests/CmdletForge.Tests/CmdletForge.Tests.csproj --configuration Release --no-build
+      - name: Publish portable EXE
+        shell: pwsh
+        run: ./scripts/package.ps1 -UpdateRepository '${{ github.repository }}'
+      - name: Upload portable build
+        uses: actions/upload-artifact@v7
+        with:
+          name: CmdletForge-win-x64-${{ github.ref_name }}
+          path: |
+            artifacts/publish/CmdletForge-win-x64.exe
+            artifacts/publish/CmdletForge-win-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 14

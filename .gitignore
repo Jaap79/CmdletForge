@@ -1,0 +1,13 @@
+bin/
+obj/
+artifacts/
+.vs/
+*.user
+*.suo
+*.log
+TestResults/
+docs/internal/
+Cubics-*.docx
+Cubics-*.pdf
+*.pfx
+*.snk

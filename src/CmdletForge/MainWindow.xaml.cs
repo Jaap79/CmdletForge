@@ -1,0 +1,625 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using CmdletForge.Models;
+using CmdletForge.Services;
+using CmdletForge.Theming;
+using CmdletForge.Views;
+using Microsoft.Win32;
+
+namespace CmdletForge;
+
+public partial class MainWindow : Window
+{
+    private readonly SettingsService _settingsService = new();
+    private readonly ThemeService _themeService = new();
+    private readonly TerminalSession _terminal = new();
+    private readonly DispatcherTimer _syntaxTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
+    private readonly DocumentState _document = new();
+    private AppSettings _settings;
+    private bool _suppressDirty;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        _settings = _settingsService.Load();
+
+        _syntaxTimer.Tick += (_, _) =>
+        {
+            _syntaxTimer.Stop();
+            RefreshDiagnostics();
+        };
+        _terminal.MessageReceived += Terminal_MessageReceived;
+        Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateCaretStatus();
+
+        Loaded += MainWindow_Loaded;
+        SourceInitialized += (_, _) => ApplyTheme();
+        Closing += MainWindow_Closing;
+        PreviewKeyDown += MainWindow_PreviewKeyDown;
+
+        ConfigureFromSettings();
+        SetDocumentText(DefaultScript());
+        _document.IsDirty = false;
+        UpdateWindowTitle();
+    }
+
+    public void OpenFromCommandLine(string path) => OpenDocument(path);
+
+    public void ApplyUpdateAndExit(StagedUpdate update)
+    {
+        if (!ConfirmDiscardOrSave())
+            return;
+        if (MessageBox.Show(this,
+                $"Cmdlet Forge wordt afgesloten en vervangen door versie {update.Info.LatestVersion}. Doorgaan?",
+                "Update installeren",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+        AppUpdateService.ApplyAfterExit(update);
+        _document.IsDirty = false;
+        Application.Current.Shutdown();
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        ApplyTheme();
+        try
+        {
+            await _terminal.StartAsync(_settings.PreferredPowerShell);
+            var version = await SystemUpdateService.GetPowerShellVersionAsync(_settings.PreferredPowerShell);
+            PowerShellStatus.Text = $"PowerShell {version}";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("PowerShell-terminal kon niet starten.", ex);
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, $"Terminal kon niet starten: {ex.Message}"));
+            PowerShellStatus.Text = "PowerShell niet beschikbaar";
+        }
+    }
+
+    private void ConfigureFromSettings()
+    {
+        ThemeCombo.SelectedIndex = _settings.Theme == AppTheme.Dark ? 0 : 1;
+        PaletteCombo.SelectedIndex = (int)_settings.Palette;
+        DarkModeMenu.IsChecked = _settings.Theme == AppTheme.Dark;
+        WordWrapMenu.IsChecked = _settings.WordWrap;
+        CrtMenu.IsChecked = _settings.CrtOverlay;
+        Editor.WordWrap = _settings.WordWrap;
+        Editor.FontSize = Math.Clamp(_settings.FontSize, 10, 28);
+        CrtOverlay.IsActive = _settings.CrtOverlay;
+        RefreshRecentFilesMenu();
+    }
+
+    private void ApplyTheme()
+    {
+        _themeService.Apply(_settings.Theme, _settings.Palette, this);
+        var colors = _themeService.GetEditorColors();
+        Editor.Background = new SolidColorBrush(colors.Background);
+        Editor.Foreground = new SolidColorBrush(colors.Foreground);
+        Editor.TextArea.SelectionBrush = new SolidColorBrush(colors.Selection);
+        Editor.TextArea.SelectionForeground = new SolidColorBrush(colors.Foreground);
+        Editor.LineNumbersForeground = (Brush)FindResource("TextMutedBrush");
+        Editor.SyntaxHighlighting = new PowerShellHighlightingDefinition(colors);
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (!ConfirmDiscardOrSave())
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _settings.FontSize = Editor.FontSize;
+        try
+        {
+            _settingsService.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Instellingen konden niet worden opgeslagen.", ex);
+        }
+
+        _terminal.Dispose();
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+        if (ctrl && e.Key == Key.N) { NewFile(); e.Handled = true; }
+        else if (ctrl && e.Key == Key.O) { OpenFile(); e.Handled = true; }
+        else if (ctrl && !shift && e.Key == Key.S) { SaveDocument(); e.Handled = true; }
+        else if (ctrl && shift && e.Key == Key.S) { SaveDocumentAs(); e.Handled = true; }
+        else if (ctrl && e.Key == Key.F) { ShowSearch(false); e.Handled = true; }
+        else if (ctrl && e.Key == Key.H) { ShowSearch(true); e.Handled = true; }
+        else if (ctrl && e.Key == Key.G) { GoToLineBox.Focus(); GoToLineBox.SelectAll(); e.Handled = true; }
+        else if (ctrl && e.Key == Key.Enter) { RunSelection(); e.Handled = true; }
+        else if (e.Key == Key.F5 && shift) { _ = RestartTerminalAsync(); e.Handled = true; }
+        else if (e.Key == Key.F5) { RunScript(); e.Handled = true; }
+        else if (e.Key == Key.F3) { FindNext(shift); e.Handled = true; }
+        else if (e.Key == Key.Escape && SearchPanel.Visibility == Visibility.Visible) { SearchPanel.Visibility = Visibility.Collapsed; Editor.Focus(); e.Handled = true; }
+    }
+
+    private void Editor_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Add && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            Editor.FontSize = Math.Min(28, Editor.FontSize + 1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Subtract && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            Editor.FontSize = Math.Max(10, Editor.FontSize - 1);
+            e.Handled = true;
+        }
+    }
+
+    private void Editor_TextChanged(object? sender, EventArgs e)
+    {
+        if (!_suppressDirty)
+            _document.IsDirty = true;
+        UpdateWindowTitle();
+        _syntaxTimer.Stop();
+        _syntaxTimer.Start();
+    }
+
+    private void RefreshDiagnostics()
+    {
+        var diagnostics = SyntaxService.Analyze(Editor.Text);
+        ProblemsList.ItemsSource = diagnostics;
+        SyntaxStatus.Text = diagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {diagnostics.Count} fout(en)";
+        SyntaxStatus.Foreground = diagnostics.Count == 0
+            ? (Brush)FindResource("GoodBrush")
+            : (Brush)FindResource("DangerBrush");
+    }
+
+    private void ProblemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ProblemsList.SelectedItem is not SyntaxDiagnostic diagnostic)
+            return;
+        var offset = Math.Clamp(diagnostic.StartOffset, 0, Editor.Document.TextLength);
+        var length = Math.Clamp(diagnostic.Length, 0, Editor.Document.TextLength - offset);
+        Editor.Select(offset, length);
+        Editor.CaretOffset = offset;
+        Editor.ScrollToLine(diagnostic.Line);
+        Editor.Focus();
+    }
+
+    private void UpdateCaretStatus()
+    {
+        var line = Editor.TextArea.Caret.Line;
+        var column = Editor.TextArea.Caret.Column;
+        CaretStatus.Text = $"Regel {line}, teken {column}";
+        GoToLineBox.Text = line.ToString();
+        GoToColumnBox.Text = column.ToString();
+    }
+
+    private void NewFile()
+    {
+        if (!ConfirmDiscardOrSave())
+            return;
+        _document.FilePath = null;
+        _document.Encoding = new UTF8Encoding(false);
+        _document.NewLine = Environment.NewLine;
+        SetDocumentText(DefaultScript());
+        _document.IsDirty = false;
+        UpdateWindowTitle();
+    }
+
+    private void OpenFile()
+    {
+        if (!ConfirmDiscardOrSave())
+            return;
+        var dialog = new OpenFileDialog
+        {
+            Title = "PowerShell-script openen",
+            Filter = "PowerShell-bestanden (*.ps1;*.psm1;*.psd1)|*.ps1;*.psm1;*.psd1|Alle bestanden (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true)
+            OpenDocument(dialog.FileName);
+    }
+
+    private void OpenDocument(string path)
+    {
+        try
+        {
+            var file = FileService.Read(path);
+            _document.FilePath = Path.GetFullPath(path);
+            _document.Encoding = file.Encoding;
+            _document.NewLine = file.NewLine;
+            SetDocumentText(file.Text);
+            _document.IsDirty = false;
+            AddRecentFile(_document.FilePath);
+            UpdateWindowTitle();
+            Editor.Focus();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Bestand kon niet worden geopend: {path}", ex);
+            MessageBox.Show(this, ex.Message, "Openen mislukt", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private bool SaveDocument()
+    {
+        if (_document.FilePath is null)
+            return SaveDocumentAs();
+        try
+        {
+            FileService.Write(_document.FilePath, Editor.Text, _document.Encoding, _document.NewLine);
+            _document.IsDirty = false;
+            AddRecentFile(_document.FilePath);
+            UpdateWindowTitle();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Bestand kon niet worden opgeslagen: {_document.FilePath}", ex);
+            MessageBox.Show(this, ex.Message, "Opslaan mislukt", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+
+    private bool SaveDocumentAs()
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "PowerShell-script opslaan",
+            Filter = "PowerShell-script (*.ps1)|*.ps1|PowerShell-module (*.psm1)|*.psm1|PowerShell-data (*.psd1)|*.psd1|Alle bestanden (*.*)|*.*",
+            DefaultExt = ".ps1",
+            AddExtension = true,
+            FileName = _document.DisplayName
+        };
+        if (dialog.ShowDialog(this) != true)
+            return false;
+        _document.FilePath = dialog.FileName;
+        return SaveDocument();
+    }
+
+    private bool ConfirmDiscardOrSave()
+    {
+        if (!_document.IsDirty)
+            return true;
+        var result = MessageBox.Show(this,
+            $"Wijzigingen in {_document.DisplayName} opslaan?",
+            "Niet-opgeslagen wijzigingen",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning);
+        return result switch
+        {
+            MessageBoxResult.Yes => SaveDocument(),
+            MessageBoxResult.No => true,
+            _ => false
+        };
+    }
+
+    private void SetDocumentText(string text)
+    {
+        _suppressDirty = true;
+        Editor.Text = text;
+        Editor.CaretOffset = 0;
+        _suppressDirty = false;
+        RefreshDiagnostics();
+    }
+
+    private void UpdateWindowTitle()
+    {
+        var dirty = _document.IsDirty ? " •" : string.Empty;
+        Title = $"{_document.DisplayName}{dirty} — Cmdlet Forge";
+        FileStatus.Text = $"{_document.DisplayName}{dirty} · {_document.Encoding.WebName}";
+    }
+
+    private void AddRecentFile(string path)
+    {
+        _settings.RecentFiles.RemoveAll(item => string.Equals(item, path, StringComparison.OrdinalIgnoreCase));
+        _settings.RecentFiles.Insert(0, path);
+        if (_settings.RecentFiles.Count > 10)
+            _settings.RecentFiles.RemoveRange(10, _settings.RecentFiles.Count - 10);
+        RefreshRecentFilesMenu();
+    }
+
+    private void RefreshRecentFilesMenu()
+    {
+        RecentFilesMenu.Items.Clear();
+        foreach (var path in _settings.RecentFiles.Where(File.Exists))
+        {
+            var item = new MenuItem { Header = path, ToolTip = path };
+            item.Click += (_, _) =>
+            {
+                if (ConfirmDiscardOrSave())
+                    OpenDocument(path);
+            };
+            RecentFilesMenu.Items.Add(item);
+        }
+        RecentFilesMenu.IsEnabled = RecentFilesMenu.Items.Count > 0;
+    }
+
+    private void ShowSearch(bool replace)
+    {
+        SearchPanel.Visibility = Visibility.Visible;
+        ReplaceControls.Visibility = replace ? Visibility.Visible : Visibility.Collapsed;
+        if (!string.IsNullOrEmpty(Editor.SelectedText) && !Editor.SelectedText.Contains('\n'))
+            FindBox.Text = Editor.SelectedText;
+        FindBox.Focus();
+        FindBox.SelectAll();
+    }
+
+    private Regex? BuildSearchRegex()
+    {
+        if (string.IsNullOrEmpty(FindBox.Text))
+            return null;
+        try
+        {
+            FindStatus.Text = string.Empty;
+            return TextSearchService.BuildRegex(FindBox.Text, new SearchOptions(
+                MatchCaseCheck.IsChecked == true,
+                WholeWordCheck.IsChecked == true,
+                RegexCheck.IsChecked == true));
+        }
+        catch (ArgumentException ex)
+        {
+            FindStatus.Text = $"Regexfout: {ex.Message}";
+            return null;
+        }
+    }
+
+    private void FindNext(bool backwards)
+    {
+        var regex = BuildSearchRegex();
+        if (regex is null)
+            return;
+        var matches = regex.Matches(Editor.Text).Cast<Match>().Where(match => match.Length > 0).ToArray();
+        if (matches.Length == 0)
+        {
+            FindStatus.Text = "Geen resultaten";
+            return;
+        }
+
+        Match match;
+        if (backwards)
+            match = matches.LastOrDefault(item => item.Index < Editor.SelectionStart) ?? matches[^1];
+        else
+            match = matches.FirstOrDefault(item => item.Index >= Editor.SelectionStart + Editor.SelectionLength) ?? matches[0];
+
+        SelectMatch(match);
+        var index = Array.IndexOf(matches, match) + 1;
+        FindStatus.Text = $"{index} / {matches.Length}";
+    }
+
+    private void SelectMatch(Match match)
+    {
+        Editor.Select(match.Index, match.Length);
+        Editor.CaretOffset = match.Index + match.Length;
+        var line = Editor.Document.GetLineByOffset(match.Index).LineNumber;
+        Editor.ScrollToLine(line);
+        Editor.Focus();
+    }
+
+    private void ReplaceOne()
+    {
+        var regex = BuildSearchRegex();
+        if (regex is null)
+            return;
+        var selected = Editor.SelectedText;
+        var match = regex.Match(selected);
+        if (match.Success && match.Index == 0 && match.Length == selected.Length)
+            Editor.Document.Replace(Editor.SelectionStart, Editor.SelectionLength, match.Result(ReplaceBox.Text));
+        FindNext(false);
+    }
+
+    private void ReplaceAll()
+    {
+        var regex = BuildSearchRegex();
+        if (regex is null)
+            return;
+        var original = Editor.Text;
+        var count = regex.Matches(original).Cast<Match>().Count(match => match.Length > 0);
+        if (count == 0)
+        {
+            FindStatus.Text = "Geen resultaten";
+            return;
+        }
+        Editor.Document.Text = regex.Replace(original, ReplaceBox.Text);
+        FindStatus.Text = $"{count} vervangen";
+    }
+
+    private void GoTo()
+    {
+        if (!int.TryParse(GoToLineBox.Text, out var requestedLine) || !int.TryParse(GoToColumnBox.Text, out var requestedColumn))
+        {
+            MessageBox.Show(this, "Gebruik gehele getallen voor regel en teken.", "Spring naar", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var lineNumber = Math.Clamp(requestedLine, 1, Editor.Document.LineCount);
+        var line = Editor.Document.GetLineByNumber(lineNumber);
+        var column = Math.Clamp(requestedColumn, 1, line.Length + 1);
+        Editor.CaretOffset = line.Offset + column - 1;
+        Editor.ScrollTo(lineNumber, column);
+        Editor.Focus();
+    }
+
+    private void RunSelection()
+    {
+        var script = string.IsNullOrWhiteSpace(Editor.SelectedText) ? Editor.Text : Editor.SelectedText;
+        _ = ExecuteScriptAsync(script);
+    }
+
+    private void RunScript()
+    {
+        var diagnostics = SyntaxService.Analyze(Editor.Text);
+        if (diagnostics.Count > 0 && MessageBox.Show(this,
+                $"Het script bevat {diagnostics.Count} syntaxfout(en). Toch uitvoeren?",
+                "Syntaxfouten",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            BottomTabs.SelectedIndex = 1;
+            return;
+        }
+        _ = ExecuteScriptAsync(Editor.Text);
+    }
+
+    private async Task ExecuteScriptAsync(string script)
+    {
+        BottomTabs.SelectedIndex = 0;
+        try
+        {
+            await _terminal.ExecuteScriptTextAsync(script);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Scriptuitvoering kon niet worden gestart.", ex);
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
+        }
+    }
+
+    private async Task RestartTerminalAsync()
+    {
+        try
+        {
+            AppendTerminal(new TerminalMessage(TerminalStream.System, "Actief proces wordt afgebroken..."));
+            await _terminal.RestartAsync();
+        }
+        catch (Exception ex)
+        {
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
+        }
+    }
+
+    private async void TerminalRun_Click(object sender, RoutedEventArgs e)
+    {
+        var command = TerminalInput.Text.Trim();
+        if (command.Length == 0)
+            return;
+        TerminalInput.Clear();
+        try
+        {
+            await _terminal.ExecuteAsync(command);
+        }
+        catch (Exception ex)
+        {
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
+        }
+    }
+
+    private void TerminalInput_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            TerminalRun_Click(sender, new RoutedEventArgs());
+            e.Handled = true;
+        }
+    }
+
+    private void Terminal_MessageReceived(object? sender, TerminalMessage message) =>
+        Dispatcher.BeginInvoke(() => AppendTerminal(message));
+
+    private void AppendTerminal(TerminalMessage message)
+    {
+        var brushKey = message.Stream switch
+        {
+            TerminalStream.Input => "AccentBrush",
+            TerminalStream.Error => "DangerBrush",
+            TerminalStream.System => "TextMutedBrush",
+            _ => "TextBrush"
+        };
+        var paragraph = new Paragraph(new Run(message.Text) { Foreground = (Brush)FindResource(brushKey) })
+        {
+            Margin = new Thickness(0),
+            LineHeight = 18
+        };
+        TerminalOutput.Document.Blocks.Add(paragraph);
+        while (TerminalOutput.Document.Blocks.Count > 2500)
+            TerminalOutput.Document.Blocks.Remove(TerminalOutput.Document.Blocks.FirstBlock);
+        TerminalOutput.ScrollToEnd();
+    }
+
+    private static string DefaultScript() => "# Cmdlet Forge\r\n# Schrijf PowerShell, controleer de syntax en voer uit met F5.\r\n\r\n$PSVersionTable.PSVersion\r\n";
+
+    private void ThemeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized || ThemeCombo.SelectedItem is not ComboBoxItem item)
+            return;
+        _settings.Theme = string.Equals(item.Tag?.ToString(), "Light", StringComparison.Ordinal) ? AppTheme.Light : AppTheme.Dark;
+        DarkModeMenu.IsChecked = _settings.Theme == AppTheme.Dark;
+        ApplyTheme();
+    }
+
+    private void PaletteCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized || PaletteCombo.SelectedItem is not ComboBoxItem item || !Enum.TryParse<EditorPalette>(item.Tag?.ToString(), out var palette))
+            return;
+        _settings.Palette = palette;
+        ApplyTheme();
+    }
+
+    private void DarkModeMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.Theme = DarkModeMenu.IsChecked ? AppTheme.Dark : AppTheme.Light;
+        ThemeCombo.SelectedIndex = _settings.Theme == AppTheme.Dark ? 0 : 1;
+        ApplyTheme();
+    }
+
+    private void WordWrapMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.WordWrap = WordWrapMenu.IsChecked;
+        Editor.WordWrap = _settings.WordWrap;
+    }
+
+    private void CrtMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.CrtOverlay = CrtMenu.IsChecked;
+        CrtOverlay.IsActive = _settings.CrtOverlay;
+    }
+
+    private void ManageModules_Click(object sender, RoutedEventArgs e) =>
+        new ModuleManagerWindow(new ModuleService(_settings.PreferredPowerShell), _themeService) { Owner = this }.ShowDialog();
+
+    private void ManageUpdates_Click(object sender, RoutedEventArgs e) =>
+        new UpdateWindow(_settings.PreferredPowerShell, _themeService) { Owner = this }.ShowDialog();
+
+    private void OpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(AppLog.LogDirectory);
+        Process.Start(new ProcessStartInfo("explorer.exe", AppLog.LogDirectory) { UseShellExecute = true });
+    }
+
+    private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show(this,
+        $"Cmdlet Forge {AppInfo.Version.ToString(3)}\n\nNative PowerShell-workbench voor Windows.\nScripts worden altijd uitgevoerd in een apart pwsh-proces.",
+        "Over Cmdlet Forge", MessageBoxButton.OK, MessageBoxImage.Information);
+
+    private void GoToBox_PreviewKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { GoTo(); e.Handled = true; } }
+    private void FindBox_PreviewKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) { FindNext(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)); e.Handled = true; } }
+    private void FindBox_TextChanged(object sender, TextChangedEventArgs e) { if (SearchPanel.Visibility == Visibility.Visible) FindNext(false); }
+    private void NewFile_Click(object sender, RoutedEventArgs e) => NewFile();
+    private void OpenFile_Click(object sender, RoutedEventArgs e) => OpenFile();
+    private void SaveFile_Click(object sender, RoutedEventArgs e) => SaveDocument();
+    private void SaveAsFile_Click(object sender, RoutedEventArgs e) => SaveDocumentAs();
+    private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+    private void Undo_Click(object sender, RoutedEventArgs e) => Editor.Undo();
+    private void Redo_Click(object sender, RoutedEventArgs e) => Editor.Redo();
+    private void SelectAll_Click(object sender, RoutedEventArgs e) => Editor.SelectAll();
+    private void ShowFind_Click(object sender, RoutedEventArgs e) => ShowSearch(false);
+    private void ShowReplace_Click(object sender, RoutedEventArgs e) => ShowSearch(true);
+    private void FocusGoTo_Click(object sender, RoutedEventArgs e) { GoToLineBox.Focus(); GoToLineBox.SelectAll(); }
+    private void CloseSearch_Click(object sender, RoutedEventArgs e) { SearchPanel.Visibility = Visibility.Collapsed; Editor.Focus(); }
+    private void FindNext_Click(object sender, RoutedEventArgs e) => FindNext(false);
+    private void FindPrevious_Click(object sender, RoutedEventArgs e) => FindNext(true);
+    private void ReplaceOne_Click(object sender, RoutedEventArgs e) => ReplaceOne();
+    private void ReplaceAll_Click(object sender, RoutedEventArgs e) => ReplaceAll();
+    private void GoTo_Click(object sender, RoutedEventArgs e) => GoTo();
+    private void RunSelection_Click(object sender, RoutedEventArgs e) => RunSelection();
+    private void RunScript_Click(object sender, RoutedEventArgs e) => RunScript();
+    private async void RestartTerminal_Click(object sender, RoutedEventArgs e) => await RestartTerminalAsync();
+    private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Document.Blocks.Clear();
+}
