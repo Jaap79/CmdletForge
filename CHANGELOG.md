@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-beta.1 - 2026-08-28
+## 0.2.0 - 2026-08-28
 
 - Parser-based folding for multiline PowerShell brace blocks, collapsed by default.
 - Fold markers, hidden-line summaries and global collapse/expand commands.
