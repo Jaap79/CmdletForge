@@ -13,6 +13,7 @@ Cmdlet Forge is a compact native PowerShell workbench for Windows. It combines a
 - Native WPF application; no Electron or browser runtime.
 - PowerShell editor for `.ps1`, `.psm1` and `.psd1` files.
 - Parser-backed syntax diagnostics with exact line, column and selection offsets.
+- Parser-based folding for multiline PowerShell blocks, with hidden-line markers and automatic reveal on go-to.
 - Dark and light mode with Forge, Oceanic and High Contrast editor palettes.
 - Literal, whole-word, case-sensitive and regex search/replace.
 - Direct line/character navigation.

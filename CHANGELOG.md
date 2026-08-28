@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0-beta.1 - 2026-08-28
+
+- Parser-based folding for multiline PowerShell brace blocks, collapsed by default.
+- Fold markers, hidden-line summaries and global collapse/expand commands.
+- Go-to, search and diagnostics reveal folded target text automatically.
+- Added breathing room around editor line numbers.
+- Fixed unthemed white module-row hover and selection states.
+
 ## 0.1.0 - 2026-08-28
 
 - Initial native Windows PowerShell editor and viewer.
