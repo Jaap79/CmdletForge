@@ -33,7 +33,7 @@ jobs:
       - name: Upload portable build
         uses: actions/upload-artifact@v7
         with:
-          name: CmdletForge-win-x64-${{ github.ref_name }}
+          name: CmdletForge-win-x64-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
           path: |
             artifacts/publish/CmdletForge-win-x64.exe
             artifacts/publish/CmdletForge-win-x64.exe.sha256

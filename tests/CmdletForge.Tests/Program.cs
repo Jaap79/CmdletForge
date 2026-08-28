@@ -106,6 +106,28 @@ var tests = new (string Name, Func<Task> Run)[]
             Assert.True(Contrast(colors.Background, colors.Foreground) >= 4.5, $"{theme}/{palette} contrast too low");
         }
         return Task.CompletedTask;
+    }),
+    ("PowerShell folding finds nested multiline blocks", () =>
+    {
+        var script = "if ($true) {\n  foreach ($item in 1..2) {\n    $item\n  }\n}";
+        var regions = PowerShellFoldingService.FindRegions(script);
+        Assert.Equal(2, regions.Count);
+        Assert.Equal(1, regions[0].StartLine);
+        Assert.Equal(5, regions[0].EndLine);
+        Assert.Equal(2, regions[1].StartLine);
+        Assert.Equal(4, regions[1].EndLine);
+        Assert.True(regions.All(region => region.EndOffset > region.StartOffset));
+        return Task.CompletedTask;
+    }),
+    ("PowerShell folding ignores braces in strings comments and single lines", () =>
+    {
+        var script = "$text = '{not a block}'\n# { also not a block }\nif ($true) { 'single line' }\nfunction Test {\n  'fold me'\n}";
+        var regions = PowerShellFoldingService.FindRegions(script);
+        Assert.Equal(1, regions.Count);
+        Assert.Equal(4, regions[0].StartLine);
+        Assert.Equal(6, regions[0].EndLine);
+        Assert.Contains("ingeklapt", regions[0].DisplayText);
+        return Task.CompletedTask;
     })
 };
 
