@@ -50,6 +50,9 @@
         <MenuItem x:Name="WordWrapMenu" Header="Regelterugloop" IsCheckable="True" Click="WordWrapMenu_Click" />
         <MenuItem x:Name="CrtMenu" Header="CRT-scanlines" IsCheckable="True" Click="CrtMenu_Click" />
         <Separator />
+        <MenuItem Header="Alle blokken _inklappen" Click="CollapseAllFoldings_Click" />
+        <MenuItem Header="Alle blokken _uitklappen" Click="ExpandAllFoldings_Click" />
+        <Separator />
         <MenuItem Header="Terminal wissen" Click="ClearTerminal_Click" />
       </MenuItem>
       <MenuItem Header="_Help">

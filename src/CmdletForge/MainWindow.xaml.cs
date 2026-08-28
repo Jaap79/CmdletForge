@@ -11,6 +11,8 @@ using CmdletForge.Models;
 using CmdletForge.Services;
 using CmdletForge.Theming;
 using CmdletForge.Views;
+using ICSharpCode.AvalonEdit.Editing;
+using ICSharpCode.AvalonEdit.Folding;
 using Microsoft.Win32;
 
 namespace CmdletForge;
@@ -22,18 +24,23 @@ public partial class MainWindow : Window
     private readonly TerminalSession _terminal = new();
     private readonly DispatcherTimer _syntaxTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private readonly DocumentState _document = new();
+    private readonly FoldingManager _foldingManager;
     private AppSettings _settings;
     private bool _suppressDirty;
+    private bool _collapseNewFoldings = true;
 
     public MainWindow()
     {
         InitializeComponent();
+        _foldingManager = FoldingManager.Install(Editor.TextArea);
+        ConfigureEditorMargins();
         _settings = _settingsService.Load();
 
         _syntaxTimer.Tick += (_, _) =>
         {
             _syntaxTimer.Stop();
             RefreshDiagnostics();
+            RefreshFoldings();
         };
         _terminal.MessageReceived += Terminal_MessageReceived;
         Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateCaretStatus();
@@ -106,6 +113,16 @@ public partial class MainWindow : Window
         Editor.TextArea.SelectionForeground = new SolidColorBrush(colors.Foreground);
         Editor.LineNumbersForeground = (Brush)FindResource("TextMutedBrush");
         Editor.SyntaxHighlighting = new PowerShellHighlightingDefinition(colors);
+        FoldingMargin.SetFoldingMarkerBrush(Editor.TextArea, (Brush)FindResource("TextMutedBrush"));
+        FoldingMargin.SetFoldingMarkerBackgroundBrush(Editor.TextArea, (Brush)FindResource("SurfaceAltBrush"));
+        FoldingMargin.SetSelectedFoldingMarkerBrush(Editor.TextArea, (Brush)FindResource("OnAccentBrush"));
+        FoldingMargin.SetSelectedFoldingMarkerBackgroundBrush(Editor.TextArea, (Brush)FindResource("AccentBrush"));
+    }
+
+    private void ConfigureEditorMargins()
+    {
+        foreach (var lineNumbers in Editor.TextArea.LeftMargins.OfType<LineNumberMargin>())
+            lineNumbers.Margin = new Thickness(5, 0, 5, 0);
     }
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -181,12 +198,44 @@ public partial class MainWindow : Window
             : (Brush)FindResource("DangerBrush");
     }
 
+    private void RefreshFoldings()
+    {
+        var collapseNewFoldings = _collapseNewFoldings;
+        var foldings = PowerShellFoldingService.FindRegions(Editor.Text)
+            .Select(region => new NewFolding(region.StartOffset, region.EndOffset)
+            {
+                Name = region.DisplayText,
+                DefaultClosed = collapseNewFoldings
+            });
+        _foldingManager.UpdateFoldings(foldings, -1);
+        if (collapseNewFoldings)
+        {
+            foreach (var folding in _foldingManager.AllFoldings)
+                folding.IsFolded = true;
+        }
+        _collapseNewFoldings = false;
+    }
+
+    private void SetAllFoldings(bool isFolded)
+    {
+        foreach (var folding in _foldingManager.AllFoldings)
+            folding.IsFolded = isFolded;
+        Editor.Focus();
+    }
+
+    private void ExpandFoldingsContaining(int offset)
+    {
+        foreach (var folding in _foldingManager.GetFoldingsContaining(offset).ToArray())
+            folding.IsFolded = false;
+    }
+
     private void ProblemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (ProblemsList.SelectedItem is not SyntaxDiagnostic diagnostic)
             return;
         var offset = Math.Clamp(diagnostic.StartOffset, 0, Editor.Document.TextLength);
         var length = Math.Clamp(diagnostic.Length, 0, Editor.Document.TextLength - offset);
+        ExpandFoldingsContaining(offset);
         Editor.Select(offset, length);
         Editor.CaretOffset = offset;
         Editor.ScrollToLine(diagnostic.Line);
@@ -305,11 +354,13 @@ public partial class MainWindow : Window
 
     private void SetDocumentText(string text)
     {
+        _collapseNewFoldings = true;
         _suppressDirty = true;
         Editor.Text = text;
         Editor.CaretOffset = 0;
         _suppressDirty = false;
         RefreshDiagnostics();
+        RefreshFoldings();
     }
 
     private void UpdateWindowTitle()
@@ -398,6 +449,7 @@ public partial class MainWindow : Window
 
     private void SelectMatch(Match match)
     {
+        ExpandFoldingsContaining(match.Index);
         Editor.Select(match.Index, match.Length);
         Editor.CaretOffset = match.Index + match.Length;
         var line = Editor.Document.GetLineByOffset(match.Index).LineNumber;
@@ -443,7 +495,9 @@ public partial class MainWindow : Window
         var lineNumber = Math.Clamp(requestedLine, 1, Editor.Document.LineCount);
         var line = Editor.Document.GetLineByNumber(lineNumber);
         var column = Math.Clamp(requestedColumn, 1, line.Length + 1);
-        Editor.CaretOffset = line.Offset + column - 1;
+        var offset = line.Offset + column - 1;
+        ExpandFoldingsContaining(offset);
+        Editor.CaretOffset = offset;
         Editor.ScrollTo(lineNumber, column);
         Editor.Focus();
     }
@@ -622,4 +676,6 @@ public partial class MainWindow : Window
     private void RunScript_Click(object sender, RoutedEventArgs e) => RunScript();
     private async void RestartTerminal_Click(object sender, RoutedEventArgs e) => await RestartTerminalAsync();
     private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Document.Blocks.Clear();
+    private void CollapseAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(true);
+    private void ExpandAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(false);
 }
