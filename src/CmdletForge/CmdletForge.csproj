@@ -9,7 +9,7 @@
     <Description>Compact native PowerShell workbench for Windows.</Description>
     <Company>Cubics</Company>
     <Product>Cmdlet Forge</Product>
-    <Version>0.2.0</Version>
+    <Version>0.3.0-beta.1</Version>
     <ApplicationIcon>..\..\assets\cmdletforge.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>true</PublishSingleFile>

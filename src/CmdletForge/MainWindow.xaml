@@ -38,6 +38,7 @@
       <MenuItem Header="_Uitvoeren">
         <MenuItem Header="Selectie uitvoeren" InputGestureText="Ctrl+Enter" Click="RunSelection_Click" />
         <MenuItem Header="Script uitvoeren" InputGestureText="F5" Click="RunScript_Click" />
+        <MenuItem Header="Script uitvoeren met _parameters..." InputGestureText="Ctrl+F5" Click="RunScriptWithParameters_Click" />
         <MenuItem Header="Opdracht stoppen en terminal herstarten" InputGestureText="Shift+F5" Click="RestartTerminal_Click" />
       </MenuItem>
       <MenuItem Header="_Beheer">
@@ -67,6 +68,7 @@
           <Button Content="Opslaan" Margin="6,0,0,0" ToolTip="Script opslaan (Ctrl+S)" Click="SaveFile_Click" />
           <Button Content="▶ Selectie" Margin="16,0,0,0" ToolTip="Selectie uitvoeren (Ctrl+Enter)" Click="RunSelection_Click" />
           <Button Content="▶ Script" Style="{StaticResource PrimaryButton}" Margin="6,0,0,0" ToolTip="Hele script uitvoeren (F5)" Click="RunScript_Click" />
+          <Button Content="▶ Parameters..." Margin="6,0,0,0" ToolTip="Script uitvoeren met gedetecteerde parameters (Ctrl+F5)" Click="RunScriptWithParameters_Click" />
           <Button Content="■ Stop" Margin="6,0,0,0" ToolTip="Actieve PowerShell stoppen en terminal herstarten" Click="RestartTerminal_Click" />
         </StackPanel>
 
@@ -148,23 +150,42 @@
             </DockPanel>
           </Grid>
         </TabItem>
-        <TabItem Header="PROBLEMEN">
-          <ListBox x:Name="ProblemsList" MouseDoubleClick="ProblemsList_MouseDoubleClick" BorderThickness="0">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="90" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="110" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Grid.Column="0" Text="SYNTAX" Foreground="{DynamicResource DangerBrush}" FontWeight="SemiBold" />
-                  <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Grid.Column="2" Text="{Binding Location}" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Right" />
-                </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+        <TabItem x:Name="ProblemsTab" Header="PROBLEMEN">
+          <Grid Background="{DynamicResource SurfaceBrush}">
+            <ListBox x:Name="ProblemsList" MouseDoubleClick="ProblemsList_MouseDoubleClick" BorderThickness="0"
+                     HorizontalContentAlignment="Stretch">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <Grid ToolTip="{Binding Message}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="90" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="110" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                      <Border Width="3" Background="{DynamicResource DangerBrush}" Margin="0,1,6,1" />
+                      <TextBlock Text="{Binding SourceLabel}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" Margin="6,0,12,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding Location}" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Right" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Text="Geen problemen gevonden. Syntax- en uitvoerfouten verschijnen hier."
+                       Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Visibility" Value="Visible" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding ElementName=ProblemsList, Path=HasItems}" Value="True">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+          </Grid>
         </TabItem>
       </TabControl>
     </Grid>
