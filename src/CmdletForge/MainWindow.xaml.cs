@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _syntaxTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private readonly DocumentState _document = new();
     private readonly FoldingManager _foldingManager;
+    private IReadOnlyList<SyntaxDiagnostic> _syntaxDiagnostics = [];
+    private readonly List<ProblemItem> _executionProblems = [];
     private AppSettings _settings;
     private bool _suppressDirty;
     private bool _collapseNewFoldings = true;
@@ -159,6 +161,7 @@ public partial class MainWindow : Window
         else if (ctrl && e.Key == Key.H) { ShowSearch(true); e.Handled = true; }
         else if (ctrl && e.Key == Key.G) { GoToLineBox.Focus(); GoToLineBox.SelectAll(); e.Handled = true; }
         else if (ctrl && e.Key == Key.Enter) { RunSelection(); e.Handled = true; }
+        else if (ctrl && !shift && e.Key == Key.F5) { RunScriptWithParameters(); e.Handled = true; }
         else if (e.Key == Key.F5 && shift) { _ = RestartTerminalAsync(); e.Handled = true; }
         else if (e.Key == Key.F5) { RunScript(); e.Handled = true; }
         else if (e.Key == Key.F3) { FindNext(shift); e.Handled = true; }
@@ -190,12 +193,45 @@ public partial class MainWindow : Window
 
     private void RefreshDiagnostics()
     {
-        var diagnostics = SyntaxService.Analyze(Editor.Text);
-        ProblemsList.ItemsSource = diagnostics;
-        SyntaxStatus.Text = diagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {diagnostics.Count} fout(en)";
-        SyntaxStatus.Foreground = diagnostics.Count == 0
+        _syntaxDiagnostics = SyntaxService.Analyze(Editor.Text);
+        RefreshProblems();
+        SyntaxStatus.Text = _syntaxDiagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {_syntaxDiagnostics.Count} fout(en)";
+        SyntaxStatus.Foreground = _syntaxDiagnostics.Count == 0
             ? (Brush)FindResource("GoodBrush")
             : (Brush)FindResource("DangerBrush");
+    }
+
+    private void RefreshProblems()
+    {
+        var problems = _syntaxDiagnostics
+            .Select(ProblemItem.FromSyntax)
+            .Concat(_executionProblems)
+            .ToArray();
+        ProblemsList.ItemsSource = problems;
+        ProblemsTab.Header = problems.Length == 0 ? "PROBLEMEN" : $"PROBLEMEN ({problems.Length})";
+    }
+
+    private void BeginExecution()
+    {
+        _executionProblems.Clear();
+        RefreshProblems();
+        BottomTabs.SelectedIndex = 0;
+    }
+
+    private void AddExecutionProblem(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+        var problem = ProblemItem.FromExecution(message);
+        if (string.IsNullOrWhiteSpace(problem.Message))
+            return;
+        if (_executionProblems.LastOrDefault()?.Message == problem.Message)
+            return;
+        _executionProblems.Add(problem);
+        if (_executionProblems.Count > 200)
+            _executionProblems.RemoveAt(0);
+        RefreshProblems();
+        BottomTabs.SelectedItem = ProblemsTab;
     }
 
     private void RefreshFoldings()
@@ -231,14 +267,14 @@ public partial class MainWindow : Window
 
     private void ProblemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (ProblemsList.SelectedItem is not SyntaxDiagnostic diagnostic)
+        if (ProblemsList.SelectedItem is not ProblemItem problem || !problem.CanNavigate)
             return;
-        var offset = Math.Clamp(diagnostic.StartOffset, 0, Editor.Document.TextLength);
-        var length = Math.Clamp(diagnostic.Length, 0, Editor.Document.TextLength - offset);
+        var offset = Math.Clamp(problem.StartOffset!.Value, 0, Editor.Document.TextLength);
+        var length = Math.Clamp(problem.Length, 0, Editor.Document.TextLength - offset);
         ExpandFoldingsContaining(offset);
         Editor.Select(offset, length);
         Editor.CaretOffset = offset;
-        Editor.ScrollToLine(diagnostic.Line);
+        Editor.ScrollToLine(problem.Line!.Value);
         Editor.Focus();
     }
 
@@ -510,6 +546,13 @@ public partial class MainWindow : Window
 
     private void RunScript()
     {
+        if (!ConfirmRunnableScript())
+            return;
+        _ = ExecuteScriptAsync(Editor.Text);
+    }
+
+    private bool ConfirmRunnableScript()
+    {
         var diagnostics = SyntaxService.Analyze(Editor.Text);
         if (diagnostics.Count > 0 && MessageBox.Show(this,
                 $"Het script bevat {diagnostics.Count} syntaxfout(en). Toch uitvoeren?",
@@ -518,14 +561,38 @@ public partial class MainWindow : Window
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
             BottomTabs.SelectedIndex = 1;
+            return false;
+        }
+        return true;
+    }
+
+    private void RunScriptWithParameters()
+    {
+        if (!ConfirmRunnableScript())
+            return;
+
+        var definitions = ScriptParameterService.Discover(Editor.Text);
+        if (definitions.Count == 0)
+        {
+            MessageBox.Show(this,
+                "Er is geen statisch param(...) blok gevonden. Gebruik F5 voor uitvoering zonder parameters.",
+                "Geen parameters gevonden",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             return;
         }
-        _ = ExecuteScriptAsync(Editor.Text);
+
+        var dialog = new ScriptParametersWindow(definitions, _themeService, _document.DisplayName) { Owner = this };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        var workingDirectory = _document.FilePath is null ? null : Path.GetDirectoryName(_document.FilePath);
+        _ = ExecuteScriptWithParametersAsync(Editor.Text, dialog.Parameters, workingDirectory);
     }
 
     private async Task ExecuteScriptAsync(string script)
     {
-        BottomTabs.SelectedIndex = 0;
+        BeginExecution();
         try
         {
             await _terminal.ExecuteScriptTextAsync(script);
@@ -533,6 +600,23 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppLog.Error("Scriptuitvoering kon niet worden gestart.", ex);
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
+        }
+    }
+
+    private async Task ExecuteScriptWithParametersAsync(
+        string script,
+        IReadOnlyDictionary<string, object?> parameters,
+        string? workingDirectory)
+    {
+        BeginExecution();
+        try
+        {
+            await _terminal.ExecuteScriptWithParametersAsync(script, parameters, workingDirectory);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Parameterscript kon niet worden gestart.", ex);
             AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
         }
     }
@@ -556,6 +640,7 @@ public partial class MainWindow : Window
         if (command.Length == 0)
             return;
         TerminalInput.Clear();
+        BeginExecution();
         try
         {
             await _terminal.ExecuteAsync(command);
@@ -580,6 +665,9 @@ public partial class MainWindow : Window
 
     private void AppendTerminal(TerminalMessage message)
     {
+        if (message.Stream == TerminalStream.Error)
+            AddExecutionProblem(message.Text);
+
         var brushKey = message.Stream switch
         {
             TerminalStream.Input => "AccentBrush",
@@ -674,6 +762,7 @@ public partial class MainWindow : Window
     private void GoTo_Click(object sender, RoutedEventArgs e) => GoTo();
     private void RunSelection_Click(object sender, RoutedEventArgs e) => RunSelection();
     private void RunScript_Click(object sender, RoutedEventArgs e) => RunScript();
+    private void RunScriptWithParameters_Click(object sender, RoutedEventArgs e) => RunScriptWithParameters();
     private async void RestartTerminal_Click(object sender, RoutedEventArgs e) => await RestartTerminalAsync();
     private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Document.Blocks.Clear();
     private void CollapseAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(true);

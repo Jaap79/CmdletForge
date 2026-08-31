@@ -1,5 +1,6 @@
 using System.Text;
 using System.IO;
+using CmdletForge.Models;
 using CmdletForge.Services;
 using CmdletForge.Theming;
 
@@ -93,6 +94,73 @@ var tests = new (string Name, Func<Task> Run)[]
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("ok", result.StandardOutput);
         Assert.Contains("err", result.StandardError);
+    }),
+    ("Script parameters are discovered with types and metadata", () =>
+    {
+        var parameters = ScriptParameterService.Discover("""
+            param(
+                [Parameter(Mandatory=$true)] [string] $Name,
+                [switch] $Force,
+                [bool] $Enabled,
+                [string[]] $Tags,
+                [int] $Count = 3
+            )
+            """);
+        Assert.Equal(5, parameters.Count);
+        Assert.Equal("Name", parameters[0].Name);
+        Assert.Equal(ScriptParameterInputKind.Text, parameters[0].InputKind);
+        Assert.Equal(ScriptParameterInputKind.Switch, parameters[1].InputKind);
+        Assert.Equal(ScriptParameterInputKind.Boolean, parameters[2].InputKind);
+        Assert.Equal(ScriptParameterInputKind.Array, parameters[3].InputKind);
+        Assert.Equal("3", parameters[4].DefaultExpression!);
+        return Task.CompletedTask;
+    }),
+    ("Credential parameter types are deliberately unsupported", () =>
+    {
+        var parameters = ScriptParameterService.Discover("param([securestring]$Secret, [pscredential]$Credential)");
+        Assert.Equal(2, parameters.Count);
+        Assert.True(parameters.All(parameter => parameter.InputKind == ScriptParameterInputKind.Unsupported));
+        Assert.True(parameters.All(parameter => !string.IsNullOrWhiteSpace(parameter.UnsupportedReason)));
+        return Task.CompletedTask;
+    }),
+    ("Problem items distinguish syntax from execution", () =>
+    {
+        var syntax = ProblemItem.FromSyntax(new SyntaxDiagnostic(DiagnosticSeverity.Error, "missing }", 12, 1, 3, 8));
+        var execution = ProblemItem.FromExecution("parameter-runner-2d30e09fd14f4b71bba1a3039b7be4bf.ps1: runtime failure");
+        Assert.Equal("SYNTAX", syntax.SourceLabel);
+        Assert.True(syntax.CanNavigate);
+        Assert.Equal("R3, T8", syntax.Location);
+        Assert.Equal("UITVOER", execution.SourceLabel);
+        Assert.False(execution.CanNavigate);
+        Assert.Equal("runtime failure", execution.Message);
+        return Task.CompletedTask;
+    }),
+    ("Parameter execution preserves values as data", async () =>
+    {
+        using var terminal = new TerminalSession();
+        var messages = new List<TerminalMessage>();
+        terminal.MessageReceived += (_, message) => messages.Add(message);
+        var marker = "two words; $(Write-Output INJECTION)";
+        await terminal.ExecuteScriptWithParametersAsync(
+            "param([Parameter(Mandatory)][string]$Name,[switch]$Force,[string[]]$Tags)\nWrite-Output \"$Name|$Force|$($Tags -join ',')\"",
+            new Dictionary<string, object?>
+            {
+                ["Name"] = marker,
+                ["Force"] = true,
+                ["Tags"] = new[] { "alpha", "two words" }
+            });
+        var output = string.Join("\n", messages.Where(message => message.Stream == TerminalStream.Output).Select(message => message.Text));
+        Assert.Contains($"{marker}|True|alpha,two words", output);
+        Assert.False(messages.Any(message => message.Stream != TerminalStream.Output && message.Text.Contains(marker, StringComparison.Ordinal)));
+    }),
+    ("Parameterized runtime failures are emitted as errors", async () =>
+    {
+        using var terminal = new TerminalSession();
+        var messages = new List<TerminalMessage>();
+        terminal.MessageReceived += (_, message) => messages.Add(message);
+        await terminal.ExecuteScriptWithParametersAsync("throw 'runtime-problem-marker'", new Dictionary<string, object?>());
+        Assert.True(messages.Any(message => message.Stream == TerminalStream.Error
+                                            && message.Text.Contains("runtime-problem-marker", StringComparison.Ordinal)));
     }),
     ("Every editor palette has light and dark contrast", () =>
     {
