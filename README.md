@@ -13,12 +13,14 @@ Cmdlet Forge is a compact native PowerShell workbench for Windows. It combines a
 - Native WPF application; no Electron or browser runtime.
 - PowerShell editor for `.ps1`, `.psm1` and `.psd1` files.
 - Parser-backed syntax diagnostics with exact line, column and selection offsets.
+- Combined Problems pane for live syntax diagnostics and PowerShell execution errors.
 - Parser-based folding for multiline PowerShell blocks, with hidden-line markers and automatic reveal on go-to.
 - Dark and light mode with Forge, Oceanic and High Contrast editor palettes.
 - Literal, whole-word, case-sensitive and regex search/replace.
 - Direct line/character navigation.
 - Persistent `pwsh.exe` terminal with captured output, error stream and optional CRT scanlines.
 - Selection or full-script execution in an isolated PowerShell process.
+- Parser-backed parameter input for scripts with a static `param(...)` block (beta).
 - Per-module install/update flow via PSResourceGet, with a PowerShellGet fallback.
 - App updates from GitHub Releases only when the EXE has a matching SHA-256 sidecar.
 - PowerShell updates delegated to Windows Package Manager (`winget`).
@@ -42,6 +44,7 @@ The portable release includes its own .NET runtime. The executable is not Authen
 | `F3` / `Shift+F3` | Next / previous match |
 | `Ctrl+Enter` | Run selection, or the full document when nothing is selected |
 | `F5` | Run document |
+| `Ctrl+F5` | Inspect the script `param(...)` block and run with entered parameters (beta) |
 | `Shift+F5` | Stop the active PowerShell process and restart the terminal |
 | `Ctrl++` / `Ctrl+-` | Increase / decrease editor font size |
 
@@ -74,6 +77,8 @@ See [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) for the promotion and ver
 ## Security model
 
 Scripts do not execute inside the WPF process. Cmdlet Forge starts a separate, non-elevated `pwsh.exe`; stopping execution terminates that process tree. This is crash isolation, not a security sandbox: a script still has the permissions of the current Windows user.
+
+Parameterized execution serializes selected values to a short-lived JSON file in the current user's temporary directory, invokes a fixed wrapper and splats the values without constructing a PowerShell command string. Values are not printed to the terminal or application log. `SecureString` and `PSCredential` inputs are intentionally unavailable in the beta; do not use the dialog for passwords or tokens.
 
 Module names are constrained before they reach PowerShell, installations target `CurrentUser`, and every install/update requires a user confirmation. PSGallery content remains third-party code; review publisher and source before installation.
 
