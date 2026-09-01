@@ -13,6 +13,7 @@ using CmdletForge.Theming;
 using CmdletForge.Views;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Folding;
+using System.Management.Automation.Language;
 using Microsoft.Win32;
 
 namespace CmdletForge;
@@ -25,9 +26,12 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _syntaxTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
     private readonly DocumentState _document = new();
     private readonly FoldingManager _foldingManager;
+    private IReadOnlyList<SyntaxDiagnostic> _syntaxDiagnostics = [];
+    private readonly List<ProblemItem> _executionProblems = [];
     private AppSettings _settings;
     private bool _suppressDirty;
     private bool _collapseNewFoldings = true;
+    private double _lastInspectorWidth = 310;
 
     public MainWindow()
     {
@@ -39,8 +43,7 @@ public partial class MainWindow : Window
         _syntaxTimer.Tick += (_, _) =>
         {
             _syntaxTimer.Stop();
-            RefreshDiagnostics();
-            RefreshFoldings();
+            RefreshAnalysis();
         };
         _terminal.MessageReceived += Terminal_MessageReceived;
         Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateCaretStatus();
@@ -52,7 +55,6 @@ public partial class MainWindow : Window
 
         ConfigureFromSettings();
         SetDocumentText(DefaultScript());
-        _document.IsDirty = false;
         UpdateWindowTitle();
     }
 
@@ -97,6 +99,8 @@ public partial class MainWindow : Window
         DarkModeMenu.IsChecked = _settings.Theme == AppTheme.Dark;
         WordWrapMenu.IsChecked = _settings.WordWrap;
         CrtMenu.IsChecked = _settings.CrtOverlay;
+        _lastInspectorWidth = Math.Clamp(_settings.ScriptInspectorWidth, 220, 560);
+        SetInspectorVisibility(_settings.ScriptInspectorVisible);
         Editor.WordWrap = _settings.WordWrap;
         Editor.FontSize = Math.Clamp(_settings.FontSize, 10, 28);
         CrtOverlay.IsActive = _settings.CrtOverlay;
@@ -134,6 +138,10 @@ public partial class MainWindow : Window
         }
 
         _settings.FontSize = Editor.FontSize;
+        if (InspectorPanel.Visibility == Visibility.Visible && InspectorColumn.ActualWidth >= 220)
+            _lastInspectorWidth = InspectorColumn.ActualWidth;
+        _settings.ScriptInspectorVisible = InspectorPanel.Visibility == Visibility.Visible;
+        _settings.ScriptInspectorWidth = _lastInspectorWidth;
         try
         {
             _settingsService.Save(_settings);
@@ -157,8 +165,10 @@ public partial class MainWindow : Window
         else if (ctrl && shift && e.Key == Key.S) { SaveDocumentAs(); e.Handled = true; }
         else if (ctrl && e.Key == Key.F) { ShowSearch(false); e.Handled = true; }
         else if (ctrl && e.Key == Key.H) { ShowSearch(true); e.Handled = true; }
+        else if (ctrl && shift && e.Key == Key.I) { SetInspectorVisibility(InspectorPanel.Visibility != Visibility.Visible); e.Handled = true; }
         else if (ctrl && e.Key == Key.G) { GoToLineBox.Focus(); GoToLineBox.SelectAll(); e.Handled = true; }
         else if (ctrl && e.Key == Key.Enter) { RunSelection(); e.Handled = true; }
+        else if (ctrl && !shift && e.Key == Key.F5) { RunScriptWithParameters(); e.Handled = true; }
         else if (e.Key == Key.F5 && shift) { _ = RestartTerminalAsync(); e.Handled = true; }
         else if (e.Key == Key.F5) { RunScript(); e.Handled = true; }
         else if (e.Key == Key.F3) { FindNext(shift); e.Handled = true; }
@@ -188,20 +198,62 @@ public partial class MainWindow : Window
         _syntaxTimer.Start();
     }
 
-    private void RefreshDiagnostics()
+    private void RefreshAnalysis()
     {
-        var diagnostics = SyntaxService.Analyze(Editor.Text);
-        ProblemsList.ItemsSource = diagnostics;
-        SyntaxStatus.Text = diagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {diagnostics.Count} fout(en)";
-        SyntaxStatus.Foreground = diagnostics.Count == 0
+        var analysis = SyntaxService.Parse(Editor.Text);
+        RefreshDiagnostics(analysis.Diagnostics);
+        RefreshFoldings(analysis.Tokens);
+        if (InspectorPanel.Visibility == Visibility.Visible)
+            RefreshInspection(analysis.Ast);
+    }
+
+    private void RefreshDiagnostics(IReadOnlyList<SyntaxDiagnostic> diagnostics)
+    {
+        _syntaxDiagnostics = diagnostics;
+        RefreshProblems();
+        SyntaxStatus.Text = _syntaxDiagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {_syntaxDiagnostics.Count} fout(en)";
+        SyntaxStatus.Foreground = _syntaxDiagnostics.Count == 0
             ? (Brush)FindResource("GoodBrush")
             : (Brush)FindResource("DangerBrush");
     }
 
-    private void RefreshFoldings()
+    private void RefreshProblems()
+    {
+        var problems = _syntaxDiagnostics
+            .Select(ProblemItem.FromSyntax)
+            .Concat(_executionProblems)
+            .ToArray();
+        ProblemsList.ItemsSource = problems;
+        ProblemsTab.Header = problems.Length == 0 ? "PROBLEMEN" : $"PROBLEMEN ({problems.Length})";
+    }
+
+    private void BeginExecution()
+    {
+        _executionProblems.Clear();
+        RefreshProblems();
+        BottomTabs.SelectedIndex = 0;
+    }
+
+    private void AddExecutionProblem(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return;
+        var problem = ProblemItem.FromExecution(message);
+        if (string.IsNullOrWhiteSpace(problem.Message))
+            return;
+        if (_executionProblems.LastOrDefault()?.Message == problem.Message)
+            return;
+        _executionProblems.Add(problem);
+        if (_executionProblems.Count > 200)
+            _executionProblems.RemoveAt(0);
+        RefreshProblems();
+        BottomTabs.SelectedItem = ProblemsTab;
+    }
+
+    private void RefreshFoldings(IReadOnlyList<Token> tokens)
     {
         var collapseNewFoldings = _collapseNewFoldings;
-        var foldings = PowerShellFoldingService.FindRegions(Editor.Text)
+        var foldings = PowerShellFoldingService.FindRegions(tokens)
             .Select(region => new NewFolding(region.StartOffset, region.EndOffset)
             {
                 Name = region.DisplayText,
@@ -214,6 +266,73 @@ public partial class MainWindow : Window
                 folding.IsFolded = true;
         }
         _collapseNewFoldings = false;
+    }
+
+    private void RefreshInspection(ScriptBlockAst? ast = null)
+    {
+        var inspection = ScriptInspectionService.Inspect(
+            Editor.Text,
+            _document.Encoding,
+            _document.NewLine,
+            _document.FilePath,
+            _document.IsDirty,
+            ast);
+
+        FunctionsList.ItemsSource = inspection.Functions;
+        FunctionsHeader.Text = inspection.Functions.Count == 0
+            ? "FUNCTIES"
+            : $"FUNCTIES ({inspection.Functions.Count})";
+
+        InspectorFilePath.Text = _document.FilePath ?? "Nog niet opgeslagen";
+        InspectorFilePath.ToolTip = _document.FilePath;
+        InspectorCounts.Text = $"{inspection.LineCount:N0} regels · {inspection.CharacterCount:N0} tekens\n{inspection.ByteCount:N0} bytes";
+        InspectorEncoding.Text = _document.Encoding.GetPreamble().Length == 0
+            ? $"{_document.Encoding.WebName} · geen BOM"
+            : $"{_document.Encoding.WebName} · BOM";
+        InspectorHash.Text = inspection.Sha256;
+        InspectorHash.ToolTip = inspection.Sha256;
+        InspectorHashScope.Text = inspection.UsesSavedFile
+            ? "Hash van het opgeslagen bestand op schijf."
+            : "Hash van de actuele editorinhoud zoals deze zou worden opgeslagen.";
+        UpdateInspectorSaveState();
+    }
+
+    private void UpdateInspectorSaveState()
+    {
+        if (_document.IsDirty)
+        {
+            InspectorSaveState.Text = "Niet opgeslagen sinds laatste wijziging";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("WarningBrush");
+        }
+        else if (_document.FilePath is null)
+        {
+            InspectorSaveState.Text = "Nieuw, nog niet opgeslagen";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("NeutralBrush");
+        }
+        else
+        {
+            InspectorSaveState.Text = "Opgeslagen";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("GoodBrush");
+        }
+    }
+
+    private void SetInspectorVisibility(bool visible)
+    {
+        if (!visible && InspectorColumn.ActualWidth >= 220)
+            _lastInspectorWidth = InspectorColumn.ActualWidth;
+
+        ScriptInspectorMenu.IsChecked = visible;
+        InspectorPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        InspectorSplitter.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        InspectorSplitterColumn.Width = visible ? new GridLength(5) : new GridLength(0);
+        InspectorColumn.MinWidth = visible ? 220 : 0;
+        InspectorColumn.Width = visible
+            ? new GridLength(Math.Clamp(_lastInspectorWidth, 220, 560))
+            : new GridLength(0);
+        _settings.ScriptInspectorVisible = visible;
+
+        if (visible && IsInitialized)
+            RefreshInspection();
     }
 
     private void SetAllFoldings(bool isFolded)
@@ -231,14 +350,14 @@ public partial class MainWindow : Window
 
     private void ProblemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (ProblemsList.SelectedItem is not SyntaxDiagnostic diagnostic)
+        if (ProblemsList.SelectedItem is not ProblemItem problem || !problem.CanNavigate)
             return;
-        var offset = Math.Clamp(diagnostic.StartOffset, 0, Editor.Document.TextLength);
-        var length = Math.Clamp(diagnostic.Length, 0, Editor.Document.TextLength - offset);
+        var offset = Math.Clamp(problem.StartOffset!.Value, 0, Editor.Document.TextLength);
+        var length = Math.Clamp(problem.Length, 0, Editor.Document.TextLength - offset);
         ExpandFoldingsContaining(offset);
         Editor.Select(offset, length);
         Editor.CaretOffset = offset;
-        Editor.ScrollToLine(diagnostic.Line);
+        Editor.ScrollToLine(problem.Line!.Value);
         Editor.Focus();
     }
 
@@ -259,7 +378,6 @@ public partial class MainWindow : Window
         _document.Encoding = new UTF8Encoding(false);
         _document.NewLine = Environment.NewLine;
         SetDocumentText(DefaultScript());
-        _document.IsDirty = false;
         UpdateWindowTitle();
     }
 
@@ -287,7 +405,6 @@ public partial class MainWindow : Window
             _document.Encoding = file.Encoding;
             _document.NewLine = file.NewLine;
             SetDocumentText(file.Text);
-            _document.IsDirty = false;
             AddRecentFile(_document.FilePath);
             UpdateWindowTitle();
             Editor.Focus();
@@ -309,6 +426,7 @@ public partial class MainWindow : Window
             _document.IsDirty = false;
             AddRecentFile(_document.FilePath);
             UpdateWindowTitle();
+            RefreshInspection();
             return true;
         }
         catch (Exception ex)
@@ -321,17 +439,10 @@ public partial class MainWindow : Window
 
     private bool SaveDocumentAs()
     {
-        var dialog = new SaveFileDialog
-        {
-            Title = "PowerShell-script opslaan",
-            Filter = "PowerShell-script (*.ps1)|*.ps1|PowerShell-module (*.psm1)|*.psm1|PowerShell-data (*.psd1)|*.psd1|Alle bestanden (*.*)|*.*",
-            DefaultExt = ".ps1",
-            AddExtension = true,
-            FileName = _document.DisplayName
-        };
-        if (dialog.ShowDialog(this) != true)
+        var dialog = new SaveFileWindow(_themeService, _document.DisplayName, _document.FilePath) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.SelectedPath is null)
             return false;
-        _document.FilePath = dialog.FileName;
+        _document.FilePath = dialog.SelectedPath;
         return SaveDocument();
     }
 
@@ -358,9 +469,10 @@ public partial class MainWindow : Window
         _suppressDirty = true;
         Editor.Text = text;
         Editor.CaretOffset = 0;
+        _document.IsDirty = false;
         _suppressDirty = false;
-        RefreshDiagnostics();
-        RefreshFoldings();
+        _syntaxTimer.Stop();
+        RefreshAnalysis();
     }
 
     private void UpdateWindowTitle()
@@ -368,6 +480,23 @@ public partial class MainWindow : Window
         var dirty = _document.IsDirty ? " •" : string.Empty;
         Title = $"{_document.DisplayName}{dirty} — Cmdlet Forge";
         FileStatus.Text = $"{_document.DisplayName}{dirty} · {_document.Encoding.WebName}";
+        UpdateInspectorSaveState();
+    }
+
+    private void FunctionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (FunctionsList.SelectedItem is not ScriptFunctionInfo function)
+            return;
+
+        FunctionsList.SelectedItem = null;
+        var offset = Math.Clamp(function.StartOffset, 0, Editor.Document.TextLength);
+        ExpandFoldingsContaining(offset);
+        Editor.Select(offset, 0);
+        Editor.CaretOffset = offset;
+        Editor.ScrollTo(function.Line, function.Column);
+        GoToLineBox.Text = function.Line.ToString();
+        GoToColumnBox.Text = function.Column.ToString();
+        Editor.Focus();
     }
 
     private void AddRecentFile(string path)
@@ -510,6 +639,13 @@ public partial class MainWindow : Window
 
     private void RunScript()
     {
+        if (!ConfirmRunnableScript())
+            return;
+        _ = ExecuteScriptAsync(Editor.Text);
+    }
+
+    private bool ConfirmRunnableScript()
+    {
         var diagnostics = SyntaxService.Analyze(Editor.Text);
         if (diagnostics.Count > 0 && MessageBox.Show(this,
                 $"Het script bevat {diagnostics.Count} syntaxfout(en). Toch uitvoeren?",
@@ -518,14 +654,38 @@ public partial class MainWindow : Window
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
             BottomTabs.SelectedIndex = 1;
+            return false;
+        }
+        return true;
+    }
+
+    private void RunScriptWithParameters()
+    {
+        if (!ConfirmRunnableScript())
+            return;
+
+        var definitions = ScriptParameterService.Discover(Editor.Text);
+        if (definitions.Count == 0)
+        {
+            MessageBox.Show(this,
+                "Er is geen statisch param(...) blok gevonden. Gebruik F5 voor uitvoering zonder parameters.",
+                "Geen parameters gevonden",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             return;
         }
-        _ = ExecuteScriptAsync(Editor.Text);
+
+        var dialog = new ScriptParametersWindow(definitions, _themeService, _document.DisplayName) { Owner = this };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        var workingDirectory = _document.FilePath is null ? null : Path.GetDirectoryName(_document.FilePath);
+        _ = ExecuteScriptWithParametersAsync(Editor.Text, dialog.Parameters, workingDirectory);
     }
 
     private async Task ExecuteScriptAsync(string script)
     {
-        BottomTabs.SelectedIndex = 0;
+        BeginExecution();
         try
         {
             await _terminal.ExecuteScriptTextAsync(script);
@@ -533,6 +693,23 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppLog.Error("Scriptuitvoering kon niet worden gestart.", ex);
+            AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
+        }
+    }
+
+    private async Task ExecuteScriptWithParametersAsync(
+        string script,
+        IReadOnlyDictionary<string, object?> parameters,
+        string? workingDirectory)
+    {
+        BeginExecution();
+        try
+        {
+            await _terminal.ExecuteScriptWithParametersAsync(script, parameters, workingDirectory);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Parameterscript kon niet worden gestart.", ex);
             AppendTerminal(new TerminalMessage(TerminalStream.Error, ex.Message));
         }
     }
@@ -556,6 +733,7 @@ public partial class MainWindow : Window
         if (command.Length == 0)
             return;
         TerminalInput.Clear();
+        BeginExecution();
         try
         {
             await _terminal.ExecuteAsync(command);
@@ -580,6 +758,9 @@ public partial class MainWindow : Window
 
     private void AppendTerminal(TerminalMessage message)
     {
+        if (message.Stream == TerminalStream.Error)
+            AddExecutionProblem(message.Text);
+
         var brushKey = message.Stream switch
         {
             TerminalStream.Input => "AccentBrush",
@@ -636,6 +817,11 @@ public partial class MainWindow : Window
         CrtOverlay.IsActive = _settings.CrtOverlay;
     }
 
+    private void ScriptInspectorMenu_Click(object sender, RoutedEventArgs e) =>
+        SetInspectorVisibility(ScriptInspectorMenu.IsChecked);
+
+    private void HideScriptInspector_Click(object sender, RoutedEventArgs e) => SetInspectorVisibility(false);
+
     private void ManageModules_Click(object sender, RoutedEventArgs e) =>
         new ModuleManagerWindow(new ModuleService(_settings.PreferredPowerShell), _themeService) { Owner = this }.ShowDialog();
 
@@ -674,6 +860,7 @@ public partial class MainWindow : Window
     private void GoTo_Click(object sender, RoutedEventArgs e) => GoTo();
     private void RunSelection_Click(object sender, RoutedEventArgs e) => RunSelection();
     private void RunScript_Click(object sender, RoutedEventArgs e) => RunScript();
+    private void RunScriptWithParameters_Click(object sender, RoutedEventArgs e) => RunScriptWithParameters();
     private async void RestartTerminal_Click(object sender, RoutedEventArgs e) => await RestartTerminalAsync();
     private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Document.Blocks.Clear();
     private void CollapseAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(true);

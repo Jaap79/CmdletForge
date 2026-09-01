@@ -38,6 +38,7 @@
       <MenuItem Header="_Uitvoeren">
         <MenuItem Header="Selectie uitvoeren" InputGestureText="Ctrl+Enter" Click="RunSelection_Click" />
         <MenuItem Header="Script uitvoeren" InputGestureText="F5" Click="RunScript_Click" />
+        <MenuItem Header="Script uitvoeren met _parameters..." InputGestureText="Ctrl+F5" Click="RunScriptWithParameters_Click" />
         <MenuItem Header="Opdracht stoppen en terminal herstarten" InputGestureText="Shift+F5" Click="RestartTerminal_Click" />
       </MenuItem>
       <MenuItem Header="_Beheer">
@@ -49,6 +50,8 @@
         <MenuItem x:Name="DarkModeMenu" Header="Donkere modus" IsCheckable="True" Click="DarkModeMenu_Click" />
         <MenuItem x:Name="WordWrapMenu" Header="Regelterugloop" IsCheckable="True" Click="WordWrapMenu_Click" />
         <MenuItem x:Name="CrtMenu" Header="CRT-scanlines" IsCheckable="True" Click="CrtMenu_Click" />
+        <MenuItem x:Name="ScriptInspectorMenu" Header="_Script-inspector" InputGestureText="Ctrl+Shift+I"
+                  IsCheckable="True" Click="ScriptInspectorMenu_Click" />
         <Separator />
         <MenuItem Header="Alle blokken _inklappen" Click="CollapseAllFoldings_Click" />
         <MenuItem Header="Alle blokken _uitklappen" Click="ExpandAllFoldings_Click" />
@@ -67,6 +70,7 @@
           <Button Content="Opslaan" Margin="6,0,0,0" ToolTip="Script opslaan (Ctrl+S)" Click="SaveFile_Click" />
           <Button Content="▶ Selectie" Margin="16,0,0,0" ToolTip="Selectie uitvoeren (Ctrl+Enter)" Click="RunSelection_Click" />
           <Button Content="▶ Script" Style="{StaticResource PrimaryButton}" Margin="6,0,0,0" ToolTip="Hele script uitvoeren (F5)" Click="RunScript_Click" />
+          <Button Content="▶ Parameters..." Margin="6,0,0,0" ToolTip="Script uitvoeren met gedetecteerde parameters (Ctrl+F5)" Click="RunScriptWithParameters_Click" />
           <Button Content="■ Stop" Margin="6,0,0,0" ToolTip="Actieve PowerShell stoppen en terminal herstarten" Click="RestartTerminal_Click" />
         </StackPanel>
 
@@ -114,59 +118,193 @@
     </Border>
 
     <Grid Grid.Row="3">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="3*" MinHeight="180" />
-        <RowDefinition Height="5" />
-        <RowDefinition Height="2*" MinHeight="160" />
-      </Grid.RowDefinitions>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" MinWidth="520" />
+        <ColumnDefinition x:Name="InspectorSplitterColumn" Width="5" />
+        <ColumnDefinition x:Name="InspectorColumn" Width="310" MinWidth="220" MaxWidth="560" />
+      </Grid.ColumnDefinitions>
 
-      <Border Grid.Row="0" Background="{DynamicResource WindowBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-        <avalon:TextEditor x:Name="Editor" FontFamily="{StaticResource MonoFont}" FontSize="14"
-                           ShowLineNumbers="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                           TextChanged="Editor_TextChanged" PreviewKeyDown="Editor_PreviewKeyDown" />
-      </Border>
+      <Grid Grid.Column="0">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="3*" MinHeight="180" />
+          <RowDefinition Height="5" />
+          <RowDefinition Height="2*" MinHeight="160" />
+        </Grid.RowDefinitions>
 
-      <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ResizeDirection="Rows" />
+        <Border Grid.Row="0" Background="{DynamicResource WindowBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+          <avalon:TextEditor x:Name="Editor" FontFamily="{StaticResource MonoFont}" FontSize="14"
+                             ShowLineNumbers="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                             TextChanged="Editor_TextChanged" PreviewKeyDown="Editor_PreviewKeyDown" />
+        </Border>
 
-      <TabControl Grid.Row="2" x:Name="BottomTabs" BorderThickness="0">
-        <TabItem Header="TERMINAL">
-          <Grid Background="{DynamicResource SurfaceBrush}">
+        <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ResizeDirection="Rows" />
+
+        <TabControl Grid.Row="2" x:Name="BottomTabs" BorderThickness="0">
+          <TabItem Header="TERMINAL">
+            <Grid Background="{DynamicResource SurfaceBrush}">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <RichTextBox x:Name="TerminalOutput" Grid.Row="0" IsReadOnly="True" FontFamily="{StaticResource MonoFont}" FontSize="13"
+                           Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextBrush}" BorderThickness="0"
+                           VerticalScrollBarVisibility="Auto" Padding="10,8" />
+              <controls:ScanlineOverlay x:Name="CrtOverlay" Grid.Row="0"
+                                        ScanlineBrush="{DynamicResource CrtScanlineBrush}"
+                                        PhosphorBrush="{DynamicResource CrtPhosphorBrush}" />
+              <DockPanel Grid.Row="1" LastChildFill="True" Margin="8,4,8,8">
+                <TextBlock DockPanel.Dock="Left" Text="PS&gt;" Foreground="{DynamicResource AccentBrush}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold" Margin="0,0,8,0" />
+                <Button DockPanel.Dock="Right" Content="Uitvoeren" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="TerminalRun_Click" />
+                <TextBox x:Name="TerminalInput" FontFamily="{StaticResource MonoFont}" PreviewKeyDown="TerminalInput_PreviewKeyDown" />
+              </DockPanel>
+            </Grid>
+          </TabItem>
+          <TabItem x:Name="ProblemsTab" Header="PROBLEMEN">
+            <Grid Background="{DynamicResource SurfaceBrush}">
+              <ListBox x:Name="ProblemsList" MouseDoubleClick="ProblemsList_MouseDoubleClick" BorderThickness="0"
+                       HorizontalContentAlignment="Stretch">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ToolTip="{Binding Message}">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="110" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel Grid.Column="0" Orientation="Horizontal">
+                        <Border Width="3" Background="{DynamicResource DangerBrush}" Margin="0,1,6,1" />
+                        <TextBlock Text="{Binding SourceLabel}" Foreground="{DynamicResource TextBrush}" FontWeight="SemiBold" />
+                      </StackPanel>
+                      <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" Margin="6,0,12,0" />
+                      <TextBlock Grid.Column="2" Text="{Binding Location}" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Right" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock Text="Geen problemen gevonden. Syntax- en uitvoerfouten verschijnen hier."
+                         Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding ElementName=ProblemsList, Path=HasItems}" Value="True">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+            </Grid>
+          </TabItem>
+        </TabControl>
+      </Grid>
+
+      <GridSplitter x:Name="InspectorSplitter" Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" />
+
+      <Border x:Name="InspectorPanel" Grid.Column="2" Background="{DynamicResource SurfaceBrush}"
+              BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="3*" MinHeight="120" />
+            <RowDefinition Height="5" />
+            <RowDefinition Height="2*" MinHeight="150" />
+          </Grid.RowDefinitions>
+
+          <Grid Grid.Row="0">
             <Grid.RowDefinitions>
-              <RowDefinition Height="*" />
               <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <RichTextBox x:Name="TerminalOutput" Grid.Row="0" IsReadOnly="True" FontFamily="{StaticResource MonoFont}" FontSize="13"
-                         Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextBrush}" BorderThickness="0"
-                         VerticalScrollBarVisibility="Auto" Padding="10,8" />
-            <controls:ScanlineOverlay x:Name="CrtOverlay" Grid.Row="0"
-                                      ScanlineBrush="{DynamicResource CrtScanlineBrush}"
-                                      PhosphorBrush="{DynamicResource CrtPhosphorBrush}" />
-            <DockPanel Grid.Row="1" LastChildFill="True" Margin="8,4,8,8">
-              <TextBlock DockPanel.Dock="Left" Text="PS&gt;" Foreground="{DynamicResource AccentBrush}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold" Margin="0,0,8,0" />
-              <Button DockPanel.Dock="Right" Content="Uitvoeren" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="TerminalRun_Click" />
-              <TextBox x:Name="TerminalInput" FontFamily="{StaticResource MonoFont}" PreviewKeyDown="TerminalInput_PreviewKeyDown" />
-            </DockPanel>
+            <Border Grid.Row="0" Background="{DynamicResource SurfaceAltBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="0,0,0,1" Padding="10,6">
+              <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Right" Content="✕" Padding="8,2" MinHeight="26"
+                        ToolTip="Script-inspector verbergen (Ctrl+Shift+I)"
+                        AutomationProperties.Name="Script-inspector verbergen" Click="HideScriptInspector_Click" />
+                <TextBlock x:Name="FunctionsHeader" Text="FUNCTIES" FontWeight="SemiBold" />
+              </DockPanel>
+            </Border>
+            <Grid Grid.Row="1">
+              <ListBox x:Name="FunctionsList" BorderThickness="0" HorizontalContentAlignment="Stretch"
+                       SelectionChanged="FunctionsList_SelectionChanged"
+                       AutomationProperties.Name="Functies in het huidige script">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ToolTip="Spring naar {Binding Name} op {Binding Location}">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="3" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Background="{DynamicResource AccentBrush}" Margin="0,1,0,1" />
+                      <StackPanel Grid.Column="1" Margin="8,0,8,0">
+                        <TextBlock Text="{Binding Name}" FontFamily="{StaticResource MonoFont}" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" />
+                      </StackPanel>
+                      <TextBlock Grid.Column="2" Text="{Binding Location}" Foreground="{DynamicResource TextMutedBrush}"
+                                 FontFamily="{StaticResource MonoFont}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock Text="Geen functies gevonden. Dit is alleen informatie; het script blijft gewoon geldig."
+                         Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" TextAlignment="Center"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding ElementName=FunctionsList, Path=HasItems}" Value="True">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+            </Grid>
           </Grid>
-        </TabItem>
-        <TabItem Header="PROBLEMEN">
-          <ListBox x:Name="ProblemsList" MouseDoubleClick="ProblemsList_MouseDoubleClick" BorderThickness="0">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="90" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="110" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Grid.Column="0" Text="SYNTAX" Foreground="{DynamicResource DangerBrush}" FontWeight="SemiBold" />
-                  <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" />
-                  <TextBlock Grid.Column="2" Text="{Binding Location}" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Right" />
-                </Grid>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </TabItem>
-      </TabControl>
+
+          <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ResizeDirection="Rows" />
+
+          <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Background="{DynamicResource SurfaceAltBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="0,0,0,1" Padding="10,8">
+              <TextBlock Text="DOCUMENT" FontWeight="SemiBold" />
+            </Border>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Margin="10,8,10,12">
+                <TextBlock Text="BESTAND" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" />
+                <TextBox x:Name="InspectorFilePath" IsReadOnly="True" Background="Transparent" BorderThickness="0"
+                         MinHeight="0" Padding="0" TextWrapping="Wrap" FontFamily="{StaticResource MonoFont}" />
+
+                <TextBlock Text="STATUS" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" />
+                <StackPanel Orientation="Horizontal">
+                  <Border x:Name="InspectorSaveStateMarker" Width="3" Margin="0,2,7,2" />
+                  <TextBlock x:Name="InspectorSaveState" FontWeight="SemiBold" />
+                </StackPanel>
+
+                <TextBlock Text="OMVANG" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" />
+                <TextBlock x:Name="InspectorCounts" />
+
+                <TextBlock Text="ENCODING" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" />
+                <TextBlock x:Name="InspectorEncoding" FontFamily="{StaticResource MonoFont}" />
+
+                <TextBlock Text="SHA-256" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" />
+                <TextBox x:Name="InspectorHash" IsReadOnly="True" Background="Transparent" BorderThickness="0"
+                         MinHeight="0" Padding="0" TextWrapping="Wrap" FontFamily="{StaticResource MonoFont}" />
+                <TextBlock x:Name="InspectorHashScope" Foreground="{DynamicResource TextMutedBrush}" FontSize="11"
+                           TextWrapping="Wrap" Margin="0,3,0,0" />
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+        </Grid>
+      </Border>
     </Grid>
 
     <StatusBar Grid.Row="4">
