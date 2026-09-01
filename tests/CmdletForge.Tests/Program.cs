@@ -162,6 +162,103 @@ var tests = new (string Name, Func<Task> Run)[]
         Assert.True(messages.Any(message => message.Stream == TerminalStream.Error
                                             && message.Text.Contains("runtime-problem-marker", StringComparison.Ordinal)));
     }),
+    ("Script inspector discovers unique real functions", () =>
+    {
+        var functions = ScriptInspectionService.DiscoverFunctions("""
+            # function Comment-Fake {}
+            $text = 'function String-Fake {}'
+            function Get-Thing { 'first' }
+            function Outer-Thing {
+                function Inner-Thing { 'nested' }
+            }
+            function get-thing { 'second definition' }
+            filter Select-Thing { $_ }
+            """);
+        Assert.Equal(4, functions.Count);
+        Assert.Equal("Get-Thing", functions[0].Name);
+        Assert.Equal(2, functions[0].DefinitionCount);
+        Assert.Equal("Outer-Thing", functions[1].Name);
+        Assert.Equal("Inner-Thing", functions[2].Name);
+        Assert.Equal("filter", functions[3].Kind);
+        Assert.True(functions.All(function => function.Line >= 1 && function.StartOffset >= 0));
+        return Task.CompletedTask;
+    }),
+    ("Script inspector remains useful while a function is being typed", () =>
+    {
+        var functions = ScriptInspectionService.DiscoverFunctions("function Test-Live {\n    Write-Output 'busy'");
+        var function = Assert.Single(functions);
+        Assert.Equal("Test-Live", function.Name);
+        Assert.Equal(1, function.Line);
+        return Task.CompletedTask;
+    }),
+    ("Script inspector hashes the saved file bytes", () =>
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "test-fixtures");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "inspector-hash.ps1");
+        var encoding = new UTF8Encoding(false);
+        var text = "function Test-Hash {\n    'é'\n}\n";
+        FileService.Write(path, text, encoding, "\n");
+        var inspection = ScriptInspectionService.Inspect(text, encoding, "\n", path, false);
+        var expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        Assert.True(inspection.UsesSavedFile);
+        Assert.Equal(expected, inspection.Sha256);
+        Assert.Equal(File.ReadAllBytes(path).LongLength, inspection.ByteCount);
+        Assert.Equal(4, inspection.LineCount);
+        Assert.Equal(text.Length, inspection.CharacterCount);
+        return Task.CompletedTask;
+    }),
+    ("Dirty script metadata uses current editor contents", () =>
+    {
+        var inspection = ScriptInspectionService.Inspect("function Current {}", new UTF8Encoding(false), "\r\n", null, true);
+        Assert.False(inspection.UsesSavedFile);
+        Assert.Equal(1, inspection.LineCount);
+        Assert.Equal("function Current {}".Length, inspection.CharacterCount);
+        Assert.Equal(1, inspection.Functions.Count);
+        Assert.Equal(64, inspection.Sha256.Length);
+        return Task.CompletedTask;
+    }),
+    ("Dirty metadata matches a future UTF-16 save", () =>
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "test-fixtures");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "inspector-utf16.ps1");
+        var text = "function Test-Unicode {\n    'é'\n}\n";
+        var dirty = ScriptInspectionService.Inspect(text, Encoding.Unicode, "\r\n", null, true);
+        FileService.Write(path, text, Encoding.Unicode, "\r\n");
+        var savedBytes = File.ReadAllBytes(path);
+        var savedHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(savedBytes));
+        Assert.Equal(savedHash, dirty.Sha256);
+        Assert.Equal(savedBytes.LongLength, dirty.ByteCount);
+        return Task.CompletedTask;
+    }),
+    ("Save path appends the selected extension", () =>
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "test-fixtures");
+        Directory.CreateDirectory(root);
+        var resolution = SavePathService.Resolve(root, "new-script", ".ps1");
+        Assert.True(resolution.IsValid);
+        Assert.Equal(Path.Combine(Path.GetFullPath(root), "new-script.ps1"), resolution.Path!);
+        return Task.CompletedTask;
+    }),
+    ("Save path preserves an explicit extension", () =>
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "test-fixtures");
+        Directory.CreateDirectory(root);
+        var resolution = SavePathService.Resolve(root, "module.psm1", ".ps1");
+        Assert.True(resolution.IsValid);
+        Assert.Equal(Path.Combine(Path.GetFullPath(root), "module.psm1"), resolution.Path!);
+        return Task.CompletedTask;
+    }),
+    ("Save path rejects traversal in the file name", () =>
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "test-fixtures");
+        Directory.CreateDirectory(root);
+        var resolution = SavePathService.Resolve(root, "..\\outside.ps1", ".ps1");
+        Assert.False(resolution.IsValid);
+        Assert.True(resolution.Path is null);
+        return Task.CompletedTask;
+    }),
     ("Every editor palette has light and dark contrast", () =>
     {
         foreach (var theme in Enum.GetValues<AppTheme>())

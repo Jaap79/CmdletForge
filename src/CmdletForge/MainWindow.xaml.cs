@@ -13,6 +13,7 @@ using CmdletForge.Theming;
 using CmdletForge.Views;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Folding;
+using System.Management.Automation.Language;
 using Microsoft.Win32;
 
 namespace CmdletForge;
@@ -30,6 +31,7 @@ public partial class MainWindow : Window
     private AppSettings _settings;
     private bool _suppressDirty;
     private bool _collapseNewFoldings = true;
+    private double _lastInspectorWidth = 310;
 
     public MainWindow()
     {
@@ -41,8 +43,7 @@ public partial class MainWindow : Window
         _syntaxTimer.Tick += (_, _) =>
         {
             _syntaxTimer.Stop();
-            RefreshDiagnostics();
-            RefreshFoldings();
+            RefreshAnalysis();
         };
         _terminal.MessageReceived += Terminal_MessageReceived;
         Editor.TextArea.Caret.PositionChanged += (_, _) => UpdateCaretStatus();
@@ -54,7 +55,6 @@ public partial class MainWindow : Window
 
         ConfigureFromSettings();
         SetDocumentText(DefaultScript());
-        _document.IsDirty = false;
         UpdateWindowTitle();
     }
 
@@ -99,6 +99,8 @@ public partial class MainWindow : Window
         DarkModeMenu.IsChecked = _settings.Theme == AppTheme.Dark;
         WordWrapMenu.IsChecked = _settings.WordWrap;
         CrtMenu.IsChecked = _settings.CrtOverlay;
+        _lastInspectorWidth = Math.Clamp(_settings.ScriptInspectorWidth, 220, 560);
+        SetInspectorVisibility(_settings.ScriptInspectorVisible);
         Editor.WordWrap = _settings.WordWrap;
         Editor.FontSize = Math.Clamp(_settings.FontSize, 10, 28);
         CrtOverlay.IsActive = _settings.CrtOverlay;
@@ -136,6 +138,10 @@ public partial class MainWindow : Window
         }
 
         _settings.FontSize = Editor.FontSize;
+        if (InspectorPanel.Visibility == Visibility.Visible && InspectorColumn.ActualWidth >= 220)
+            _lastInspectorWidth = InspectorColumn.ActualWidth;
+        _settings.ScriptInspectorVisible = InspectorPanel.Visibility == Visibility.Visible;
+        _settings.ScriptInspectorWidth = _lastInspectorWidth;
         try
         {
             _settingsService.Save(_settings);
@@ -159,6 +165,7 @@ public partial class MainWindow : Window
         else if (ctrl && shift && e.Key == Key.S) { SaveDocumentAs(); e.Handled = true; }
         else if (ctrl && e.Key == Key.F) { ShowSearch(false); e.Handled = true; }
         else if (ctrl && e.Key == Key.H) { ShowSearch(true); e.Handled = true; }
+        else if (ctrl && shift && e.Key == Key.I) { SetInspectorVisibility(InspectorPanel.Visibility != Visibility.Visible); e.Handled = true; }
         else if (ctrl && e.Key == Key.G) { GoToLineBox.Focus(); GoToLineBox.SelectAll(); e.Handled = true; }
         else if (ctrl && e.Key == Key.Enter) { RunSelection(); e.Handled = true; }
         else if (ctrl && !shift && e.Key == Key.F5) { RunScriptWithParameters(); e.Handled = true; }
@@ -191,9 +198,18 @@ public partial class MainWindow : Window
         _syntaxTimer.Start();
     }
 
-    private void RefreshDiagnostics()
+    private void RefreshAnalysis()
     {
-        _syntaxDiagnostics = SyntaxService.Analyze(Editor.Text);
+        var analysis = SyntaxService.Parse(Editor.Text);
+        RefreshDiagnostics(analysis.Diagnostics);
+        RefreshFoldings(analysis.Tokens);
+        if (InspectorPanel.Visibility == Visibility.Visible)
+            RefreshInspection(analysis.Ast);
+    }
+
+    private void RefreshDiagnostics(IReadOnlyList<SyntaxDiagnostic> diagnostics)
+    {
+        _syntaxDiagnostics = diagnostics;
         RefreshProblems();
         SyntaxStatus.Text = _syntaxDiagnostics.Count == 0 ? "Syntax: in orde" : $"Syntax: {_syntaxDiagnostics.Count} fout(en)";
         SyntaxStatus.Foreground = _syntaxDiagnostics.Count == 0
@@ -234,10 +250,10 @@ public partial class MainWindow : Window
         BottomTabs.SelectedItem = ProblemsTab;
     }
 
-    private void RefreshFoldings()
+    private void RefreshFoldings(IReadOnlyList<Token> tokens)
     {
         var collapseNewFoldings = _collapseNewFoldings;
-        var foldings = PowerShellFoldingService.FindRegions(Editor.Text)
+        var foldings = PowerShellFoldingService.FindRegions(tokens)
             .Select(region => new NewFolding(region.StartOffset, region.EndOffset)
             {
                 Name = region.DisplayText,
@@ -250,6 +266,73 @@ public partial class MainWindow : Window
                 folding.IsFolded = true;
         }
         _collapseNewFoldings = false;
+    }
+
+    private void RefreshInspection(ScriptBlockAst? ast = null)
+    {
+        var inspection = ScriptInspectionService.Inspect(
+            Editor.Text,
+            _document.Encoding,
+            _document.NewLine,
+            _document.FilePath,
+            _document.IsDirty,
+            ast);
+
+        FunctionsList.ItemsSource = inspection.Functions;
+        FunctionsHeader.Text = inspection.Functions.Count == 0
+            ? "FUNCTIES"
+            : $"FUNCTIES ({inspection.Functions.Count})";
+
+        InspectorFilePath.Text = _document.FilePath ?? "Nog niet opgeslagen";
+        InspectorFilePath.ToolTip = _document.FilePath;
+        InspectorCounts.Text = $"{inspection.LineCount:N0} regels · {inspection.CharacterCount:N0} tekens\n{inspection.ByteCount:N0} bytes";
+        InspectorEncoding.Text = _document.Encoding.GetPreamble().Length == 0
+            ? $"{_document.Encoding.WebName} · geen BOM"
+            : $"{_document.Encoding.WebName} · BOM";
+        InspectorHash.Text = inspection.Sha256;
+        InspectorHash.ToolTip = inspection.Sha256;
+        InspectorHashScope.Text = inspection.UsesSavedFile
+            ? "Hash van het opgeslagen bestand op schijf."
+            : "Hash van de actuele editorinhoud zoals deze zou worden opgeslagen.";
+        UpdateInspectorSaveState();
+    }
+
+    private void UpdateInspectorSaveState()
+    {
+        if (_document.IsDirty)
+        {
+            InspectorSaveState.Text = "Niet opgeslagen sinds laatste wijziging";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("WarningBrush");
+        }
+        else if (_document.FilePath is null)
+        {
+            InspectorSaveState.Text = "Nieuw, nog niet opgeslagen";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("NeutralBrush");
+        }
+        else
+        {
+            InspectorSaveState.Text = "Opgeslagen";
+            InspectorSaveStateMarker.Background = (Brush)FindResource("GoodBrush");
+        }
+    }
+
+    private void SetInspectorVisibility(bool visible)
+    {
+        if (!visible && InspectorColumn.ActualWidth >= 220)
+            _lastInspectorWidth = InspectorColumn.ActualWidth;
+
+        ScriptInspectorMenu.IsChecked = visible;
+        InspectorPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        InspectorSplitter.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        InspectorSplitterColumn.Width = visible ? new GridLength(5) : new GridLength(0);
+        InspectorColumn.MinWidth = visible ? 220 : 0;
+        InspectorColumn.Width = visible
+            ? new GridLength(Math.Clamp(_lastInspectorWidth, 220, 560))
+            : new GridLength(0);
+        _settings.ScriptInspectorVisible = visible;
+
+        if (visible && IsInitialized)
+            RefreshInspection();
     }
 
     private void SetAllFoldings(bool isFolded)
@@ -295,7 +378,6 @@ public partial class MainWindow : Window
         _document.Encoding = new UTF8Encoding(false);
         _document.NewLine = Environment.NewLine;
         SetDocumentText(DefaultScript());
-        _document.IsDirty = false;
         UpdateWindowTitle();
     }
 
@@ -323,7 +405,6 @@ public partial class MainWindow : Window
             _document.Encoding = file.Encoding;
             _document.NewLine = file.NewLine;
             SetDocumentText(file.Text);
-            _document.IsDirty = false;
             AddRecentFile(_document.FilePath);
             UpdateWindowTitle();
             Editor.Focus();
@@ -345,6 +426,7 @@ public partial class MainWindow : Window
             _document.IsDirty = false;
             AddRecentFile(_document.FilePath);
             UpdateWindowTitle();
+            RefreshInspection();
             return true;
         }
         catch (Exception ex)
@@ -357,17 +439,10 @@ public partial class MainWindow : Window
 
     private bool SaveDocumentAs()
     {
-        var dialog = new SaveFileDialog
-        {
-            Title = "PowerShell-script opslaan",
-            Filter = "PowerShell-script (*.ps1)|*.ps1|PowerShell-module (*.psm1)|*.psm1|PowerShell-data (*.psd1)|*.psd1|Alle bestanden (*.*)|*.*",
-            DefaultExt = ".ps1",
-            AddExtension = true,
-            FileName = _document.DisplayName
-        };
-        if (dialog.ShowDialog(this) != true)
+        var dialog = new SaveFileWindow(_themeService, _document.DisplayName, _document.FilePath) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.SelectedPath is null)
             return false;
-        _document.FilePath = dialog.FileName;
+        _document.FilePath = dialog.SelectedPath;
         return SaveDocument();
     }
 
@@ -394,9 +469,10 @@ public partial class MainWindow : Window
         _suppressDirty = true;
         Editor.Text = text;
         Editor.CaretOffset = 0;
+        _document.IsDirty = false;
         _suppressDirty = false;
-        RefreshDiagnostics();
-        RefreshFoldings();
+        _syntaxTimer.Stop();
+        RefreshAnalysis();
     }
 
     private void UpdateWindowTitle()
@@ -404,6 +480,23 @@ public partial class MainWindow : Window
         var dirty = _document.IsDirty ? " •" : string.Empty;
         Title = $"{_document.DisplayName}{dirty} — Cmdlet Forge";
         FileStatus.Text = $"{_document.DisplayName}{dirty} · {_document.Encoding.WebName}";
+        UpdateInspectorSaveState();
+    }
+
+    private void FunctionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (FunctionsList.SelectedItem is not ScriptFunctionInfo function)
+            return;
+
+        FunctionsList.SelectedItem = null;
+        var offset = Math.Clamp(function.StartOffset, 0, Editor.Document.TextLength);
+        ExpandFoldingsContaining(offset);
+        Editor.Select(offset, 0);
+        Editor.CaretOffset = offset;
+        Editor.ScrollTo(function.Line, function.Column);
+        GoToLineBox.Text = function.Line.ToString();
+        GoToColumnBox.Text = function.Column.ToString();
+        Editor.Focus();
     }
 
     private void AddRecentFile(string path)
@@ -723,6 +816,11 @@ public partial class MainWindow : Window
         _settings.CrtOverlay = CrtMenu.IsChecked;
         CrtOverlay.IsActive = _settings.CrtOverlay;
     }
+
+    private void ScriptInspectorMenu_Click(object sender, RoutedEventArgs e) =>
+        SetInspectorVisibility(ScriptInspectorMenu.IsChecked);
+
+    private void HideScriptInspector_Click(object sender, RoutedEventArgs e) => SetInspectorVisibility(false);
 
     private void ManageModules_Click(object sender, RoutedEventArgs e) =>
         new ModuleManagerWindow(new ModuleService(_settings.PreferredPowerShell), _themeService) { Owner = this }.ShowDialog();

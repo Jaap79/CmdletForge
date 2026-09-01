@@ -9,7 +9,7 @@ $project = Join-Path $root 'src\CmdletForge\CmdletForge.csproj'
 $publish = Join-Path $root 'artifacts\publish'
 New-Item -ItemType Directory -Force -Path $publish | Out-Null
 
-$arguments = @('publish', $project, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--output', $publish)
+$arguments = @('publish', $project, '--configuration', 'Release', '--runtime', 'win-x64', '--self-contained', 'true', '--no-restore', '--output', $publish)
 if ($UpdateRepository) {
     $arguments += "-p:UpdateRepository=$UpdateRepository"
 }

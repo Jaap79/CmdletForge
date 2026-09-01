@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-09-01
+
+- Promoted parser-backed parameterized execution and combined syntax/runtime Problems reporting from beta.
+- Added a live, resizable script inspector with unique function/filter/workflow definitions and click-to-line navigation.
+- Added document metadata for save state, line/character/byte counts, encoding and SHA-256 of the saved or current content.
+- Added persistent visibility and width settings for the script inspector.
+- Added application-owned scrollbars that remain readable and interactive in dark and light mode across the editor and side panels.
+- Replaced the mixed-theme native Save As surface with a compact themed file dialog, including folder navigation, file-type filtering, new-folder creation and explicit overwrite confirmation.
+- Shared one PowerShell parser result between diagnostics, folding and inspection during live editing.
+
 ## 0.3.0-beta.1 - 2026-08-31
 
 - Added a parser-backed parameter dialog for scripts with a static `param(...)` block.

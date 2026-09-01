@@ -16,6 +16,12 @@ public static class PowerShellFoldingService
     {
         ArgumentNullException.ThrowIfNull(script);
         Parser.ParseInput(script, out var tokens, out _);
+        return FindRegions(tokens);
+    }
+
+    public static IReadOnlyList<PowerShellFoldRegion> FindRegions(IEnumerable<Token> tokens)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
 
         var openings = new Stack<Token>();
         var regions = new List<PowerShellFoldRegion>();

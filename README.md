@@ -15,7 +15,9 @@ Cmdlet Forge is a compact native PowerShell workbench for Windows. It combines a
 - Parser-backed syntax diagnostics with exact line, column and selection offsets.
 - Combined Problems pane for live syntax diagnostics and PowerShell execution errors.
 - Parser-based folding for multiline PowerShell blocks, with hidden-line markers and automatic reveal on go-to.
+- Live script inspector with unique function definitions, click-to-line navigation and document SHA-256 metadata.
 - Dark and light mode with Forge, Oceanic and High Contrast editor palettes.
+- Theme-aware scrollbars and a compact Save As dialog that stay consistent in dark and light mode.
 - Literal, whole-word, case-sensitive and regex search/replace.
 - Direct line/character navigation.
 - Persistent `pwsh.exe` terminal with captured output, error stream and optional CRT scanlines.
@@ -46,6 +48,7 @@ The portable release includes its own .NET runtime. The executable is not Authen
 | `F5` | Run document |
 | `Ctrl+F5` | Inspect the script `param(...)` block and run with entered parameters (beta) |
 | `Shift+F5` | Stop the active PowerShell process and restart the terminal |
+| `Ctrl+Shift+I` | Show or hide the live script inspector |
 | `Ctrl++` / `Ctrl+-` | Increase / decrease editor font size |
 
 ## Build
