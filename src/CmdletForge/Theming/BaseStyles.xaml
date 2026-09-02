@@ -16,6 +16,22 @@
   <SolidColorBrush x:Key="OnAccentBrush" Color="#15181D" />
   <SolidColorBrush x:Key="CrtScanlineBrush" Color="#3817202A" />
   <SolidColorBrush x:Key="CrtPhosphorBrush" Color="#16FF982E" />
+  <SolidColorBrush x:Key="AnsiBlackBrush" Color="#9EA7B3" />
+  <SolidColorBrush x:Key="AnsiRedBrush" Color="#FF5D6C" />
+  <SolidColorBrush x:Key="AnsiGreenBrush" Color="#32C48D" />
+  <SolidColorBrush x:Key="AnsiYellowBrush" Color="#FFB547" />
+  <SolidColorBrush x:Key="AnsiBlueBrush" Color="#82AAFF" />
+  <SolidColorBrush x:Key="AnsiMagentaBrush" Color="#D9A7FF" />
+  <SolidColorBrush x:Key="AnsiCyanBrush" Color="#70D6FF" />
+  <SolidColorBrush x:Key="AnsiWhiteBrush" Color="#F1F4F6" />
+  <SolidColorBrush x:Key="AnsiBrightBlackBrush" Color="#6F7B8A" />
+  <SolidColorBrush x:Key="AnsiBrightRedBrush" Color="#FF8A96" />
+  <SolidColorBrush x:Key="AnsiBrightGreenBrush" Color="#6EDCB1" />
+  <SolidColorBrush x:Key="AnsiBrightYellowBrush" Color="#FFD166" />
+  <SolidColorBrush x:Key="AnsiBrightBlueBrush" Color="#A9C7FF" />
+  <SolidColorBrush x:Key="AnsiBrightMagentaBrush" Color="#E7C4FF" />
+  <SolidColorBrush x:Key="AnsiBrightCyanBrush" Color="#A7E8FF" />
+  <SolidColorBrush x:Key="AnsiBrightWhiteBrush" Color="#FFFFFF" />
 
   <FontFamily x:Key="UiFont">Segoe UI</FontFamily>
   <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>

@@ -32,6 +32,17 @@ public partial class MainWindow : Window
     private bool _suppressDirty;
     private bool _collapseNewFoldings = true;
     private double _lastInspectorWidth = 310;
+    private readonly List<TerminalEntry> _terminalHistory = [];
+    private AnsiTextStyle _terminalOutputStyle;
+    private AnsiTextStyle _terminalErrorStyle;
+
+    private static readonly string[] AnsiBrushKeys =
+    [
+        "AnsiBlackBrush", "AnsiRedBrush", "AnsiGreenBrush", "AnsiYellowBrush",
+        "AnsiBlueBrush", "AnsiMagentaBrush", "AnsiCyanBrush", "AnsiWhiteBrush",
+        "AnsiBrightBlackBrush", "AnsiBrightRedBrush", "AnsiBrightGreenBrush", "AnsiBrightYellowBrush",
+        "AnsiBrightBlueBrush", "AnsiBrightMagentaBrush", "AnsiBrightCyanBrush", "AnsiBrightWhiteBrush"
+    ];
 
     public MainWindow()
     {
@@ -121,6 +132,7 @@ public partial class MainWindow : Window
         FoldingMargin.SetFoldingMarkerBackgroundBrush(Editor.TextArea, (Brush)FindResource("SurfaceAltBrush"));
         FoldingMargin.SetSelectedFoldingMarkerBrush(Editor.TextArea, (Brush)FindResource("OnAccentBrush"));
         FoldingMargin.SetSelectedFoldingMarkerBackgroundBrush(Editor.TextArea, (Brush)FindResource("AccentBrush"));
+        RenderTerminalHistory();
     }
 
     private void ConfigureEditorMargins()
@@ -719,6 +731,7 @@ public partial class MainWindow : Window
         try
         {
             AppendTerminal(new TerminalMessage(TerminalStream.System, "Actief proces wordt afgebroken..."));
+            ResetTerminalFormatting();
             await _terminal.RestartAsync();
         }
         catch (Exception ex)
@@ -758,25 +771,145 @@ public partial class MainWindow : Window
 
     private void AppendTerminal(TerminalMessage message)
     {
-        if (message.Stream == TerminalStream.Error)
-            AddExecutionProblem(message.Text);
+        var initialStyle = message.Stream switch
+        {
+            TerminalStream.Output => _terminalOutputStyle,
+            TerminalStream.Error => _terminalErrorStyle,
+            _ => default
+        };
+        var parsed = AnsiTextParser.Parse(message.Text, initialStyle);
+        if (message.Stream == TerminalStream.Output)
+            _terminalOutputStyle = parsed.FinalStyle;
+        else if (message.Stream == TerminalStream.Error)
+            _terminalErrorStyle = parsed.FinalStyle;
 
-        var brushKey = message.Stream switch
+        if (message.Stream == TerminalStream.Error && !string.IsNullOrWhiteSpace(parsed.PlainText))
+            AddExecutionProblem(parsed.PlainText);
+        if (parsed.Segments.Count == 0)
+            return;
+
+        var entry = new TerminalEntry(message.Stream, parsed.Segments);
+        _terminalHistory.Add(entry);
+        AppendTerminalVisual(entry);
+        while (_terminalHistory.Count > 2500)
+        {
+            _terminalHistory.RemoveAt(0);
+            if (TerminalOutput.Document.Blocks.FirstBlock is { } firstBlock)
+                TerminalOutput.Document.Blocks.Remove(firstBlock);
+        }
+        TerminalOutput.ScrollToEnd();
+    }
+
+    private void AppendTerminalVisual(TerminalEntry entry)
+    {
+        var fallbackBrushKey = entry.Stream switch
         {
             TerminalStream.Input => "AccentBrush",
             TerminalStream.Error => "DangerBrush",
             TerminalStream.System => "TextMutedBrush",
             _ => "TextBrush"
         };
-        var paragraph = new Paragraph(new Run(message.Text) { Foreground = (Brush)FindResource(brushKey) })
+        var paragraph = new Paragraph
         {
             Margin = new Thickness(0),
             LineHeight = 18
         };
+
+        foreach (var segment in entry.Segments)
+        {
+            var style = segment.Style;
+            var effectiveFallbackBrushKey = style.Dim ? "TextMutedBrush" : fallbackBrushKey;
+            var run = new Run(segment.Text)
+            {
+                FontWeight = style.Bold ? FontWeights.Bold : style.Dim ? FontWeights.Light : FontWeights.Normal,
+                FontStyle = style.Italic ? FontStyles.Italic : FontStyles.Normal
+            };
+
+            if (style.Underline || style.Strikethrough)
+            {
+                var decorations = new TextDecorationCollection();
+                if (style.Underline)
+                    decorations.Add(TextDecorations.Underline[0]);
+                if (style.Strikethrough)
+                    decorations.Add(TextDecorations.Strikethrough[0]);
+                run.TextDecorations = decorations;
+            }
+
+            if (style.Inverse)
+            {
+                SetTerminalBrush(run, TextElement.ForegroundProperty, style.Background, "SurfaceBrush");
+                SetTerminalBrush(run, TextElement.BackgroundProperty, style.Foreground, effectiveFallbackBrushKey);
+            }
+            else
+            {
+                SetTerminalBrush(run, TextElement.ForegroundProperty, style.Foreground, effectiveFallbackBrushKey);
+                if (style.Background is { } background)
+                    SetTerminalBrush(run, TextElement.BackgroundProperty, background, "SurfaceBrush");
+            }
+            paragraph.Inlines.Add(run);
+        }
+
         TerminalOutput.Document.Blocks.Add(paragraph);
-        while (TerminalOutput.Document.Blocks.Count > 2500)
-            TerminalOutput.Document.Blocks.Remove(TerminalOutput.Document.Blocks.FirstBlock);
+    }
+
+    private static void SetTerminalBrush(Run run, DependencyProperty property, AnsiColor? color, string fallbackBrushKey)
+    {
+        if (color is null)
+        {
+            run.SetResourceReference(property, fallbackBrushKey);
+            return;
+        }
+
+        if (color.Value.Mode == AnsiColorMode.Indexed && color.Value.Value < AnsiBrushKeys.Length)
+        {
+            run.SetResourceReference(property, AnsiBrushKeys[color.Value.Value]);
+            return;
+        }
+
+        run.SetValue(property, new SolidColorBrush(ToMediaColor(color.Value)));
+    }
+
+    private static Color ToMediaColor(AnsiColor color)
+    {
+        if (color.Mode == AnsiColorMode.Rgb)
+            return Color.FromRgb((byte)(color.Value >> 16), (byte)(color.Value >> 8), (byte)color.Value);
+
+        var index = Math.Clamp(color.Value, 0, 255);
+        if (index < 16)
+            return Colors.White;
+        if (index >= 232)
+        {
+            var gray = (byte)(8 + ((index - 232) * 10));
+            return Color.FromRgb(gray, gray, gray);
+        }
+
+        var cubeIndex = index - 16;
+        ReadOnlySpan<byte> levels = [0, 95, 135, 175, 215, 255];
+        return Color.FromRgb(
+            levels[cubeIndex / 36],
+            levels[(cubeIndex % 36) / 6],
+            levels[cubeIndex % 6]);
+    }
+
+    private void RenderTerminalHistory()
+    {
+        TerminalOutput.Document.Blocks.Clear();
+        foreach (var entry in _terminalHistory)
+            AppendTerminalVisual(entry);
         TerminalOutput.ScrollToEnd();
+    }
+
+    private void ClearTerminal()
+    {
+        _terminalHistory.Clear();
+        ResetTerminalFormatting();
+        TerminalOutput.Document.Blocks.Clear();
+    }
+
+    private void ResetTerminalFormatting()
+    {
+        _terminalOutputStyle = default;
+        _terminalErrorStyle = default;
     }
 
     private static string DefaultScript() => "# Cmdlet Forge\r\n# Schrijf PowerShell, controleer de syntax en voer uit met F5.\r\n\r\n$PSVersionTable.PSVersion\r\n";
@@ -862,7 +995,9 @@ public partial class MainWindow : Window
     private void RunScript_Click(object sender, RoutedEventArgs e) => RunScript();
     private void RunScriptWithParameters_Click(object sender, RoutedEventArgs e) => RunScriptWithParameters();
     private async void RestartTerminal_Click(object sender, RoutedEventArgs e) => await RestartTerminalAsync();
-    private void ClearTerminal_Click(object sender, RoutedEventArgs e) => TerminalOutput.Document.Blocks.Clear();
+    private void ClearTerminal_Click(object sender, RoutedEventArgs e) => ClearTerminal();
     private void CollapseAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(true);
     private void ExpandAllFoldings_Click(object sender, RoutedEventArgs e) => SetAllFoldings(false);
+
+    private sealed record TerminalEntry(TerminalStream Stream, IReadOnlyList<AnsiTextSegment> Segments);
 }
