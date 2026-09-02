@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.99.0 - 2026-09-02
+
+- Added native ANSI/VT rendering for 16-color, 256-color and truecolor PowerShell output.
+- Added terminal formatting for bold, dim, italic, underline, inverse and strikethrough text, with readable dark/light palettes.
+- Fixed Unicode commands and output in the persistent PowerShell session through UTF-8 streams and encoding-safe command transport.
+- Preserved active terminal styles across output records and reapplied the correct palette after a runtime theme change.
+- Removed ANSI and other terminal control sequences from Problems messages while retaining the readable error text.
+
 ## 0.3.0 - 2026-09-01
 
 - Promoted parser-backed parameterized execution and combined syntax/runtime Problems reporting from beta.

@@ -95,6 +95,26 @@ var tests = new (string Name, Func<Task> Run)[]
         Assert.Contains("ok", result.StandardOutput);
         Assert.Contains("err", result.StandardError);
     }),
+    ("Interactive terminal emits ANSI and UTF-8", async () =>
+    {
+        using var terminal = new TerminalSession();
+        var received = new TaskCompletionSource<TerminalMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var messages = new System.Collections.Concurrent.ConcurrentQueue<TerminalMessage>();
+        terminal.MessageReceived += (_, message) =>
+        {
+            messages.Enqueue(message);
+            if (message.Stream == TerminalStream.Output && message.Text.Contains("terminal-marker", StringComparison.Ordinal))
+                received.TrySetResult(message);
+        };
+        await terminal.StartAsync("pwsh.exe");
+        await terminal.ExecuteAsync("Write-Output \"$($PSStyle.Foreground.Green)terminal-marker ✓$($PSStyle.Reset)\"");
+        var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(ReferenceEquals(completed, received.Task),
+            "Terminaloutput bleef uit: " + string.Join(" | ", messages.Select(item => $"{item.Stream}:{item.Text}")));
+        var message = await received.Task;
+        Assert.Contains("\u001b[", message.Text);
+        Assert.Equal("terminal-marker ✓", AnsiTextParser.ToPlainText(message.Text));
+    }),
     ("Script parameters are discovered with types and metadata", () =>
     {
         var parameters = ScriptParameterService.Discover("""
@@ -257,6 +277,40 @@ var tests = new (string Name, Func<Task> Run)[]
         var resolution = SavePathService.Resolve(root, "..\\outside.ps1", ".ps1");
         Assert.False(resolution.IsValid);
         Assert.True(resolution.Path is null);
+        return Task.CompletedTask;
+    }),
+    ("ANSI parser removes codes and preserves Unicode styling", () =>
+    {
+        var parsed = AnsiTextParser.Parse("\u001b[32;1m✓ groen café 漢字\u001b[0m normaal");
+        Assert.Equal("✓ groen café 漢字 normaal", parsed.PlainText);
+        Assert.Equal(2, parsed.Segments.Count);
+        Assert.True(parsed.Segments[0].Style.Bold);
+        Assert.Equal(AnsiColor.FromIndex(2), parsed.Segments[0].Style.Foreground!.Value);
+        Assert.True(parsed.Segments[1].Style.Foreground is null);
+        return Task.CompletedTask;
+    }),
+    ("ANSI parser carries style across output records and resets it", () =>
+    {
+        var first = AnsiTextParser.Parse("\u001b[31mrood");
+        var second = AnsiTextParser.Parse(" blijft rood\u001b[0m klaar", first.FinalStyle);
+        Assert.Equal(" blijft rood klaar", second.PlainText);
+        Assert.Equal(2, second.Segments.Count);
+        Assert.Equal(AnsiColor.FromIndex(1), second.Segments[0].Style.Foreground!.Value);
+        Assert.True(second.Segments[1].Style.Foreground is null);
+        return Task.CompletedTask;
+    }),
+    ("ANSI parser supports indexed and truecolor output", () =>
+    {
+        var parsed = AnsiTextParser.Parse("\u001b[38;5;202mA\u001b[48;2;1;2;3mB");
+        Assert.Equal("AB", parsed.PlainText);
+        Assert.Equal(AnsiColor.FromIndex(202), parsed.Segments[0].Style.Foreground!.Value);
+        Assert.Equal(AnsiColor.FromRgb(1, 2, 3), parsed.Segments[1].Style.Background!.Value);
+        return Task.CompletedTask;
+    }),
+    ("ANSI parser removes non-text terminal controls", () =>
+    {
+        var parsed = AnsiTextParser.Parse("voor\u001b[2Kna\u001b]0;titel\u0007✓");
+        Assert.Equal("voorna✓", parsed.PlainText);
         return Task.CompletedTask;
     }),
     ("Every editor palette has light and dark contrast", () =>

@@ -38,10 +38,14 @@ public sealed class TerminalSession : IDisposable
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardInputEncoding = Encoding.UTF8,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 CreateNoWindow = true,
                 WorkingDirectory = Environment.CurrentDirectory
             }
         };
+        ConfigureTerminalEnvironment(process.StartInfo);
         process.StartInfo.ArgumentList.Add("-NoLogo");
         process.StartInfo.ArgumentList.Add("-NoProfile");
         process.StartInfo.ArgumentList.Add("-NoExit");
@@ -72,7 +76,7 @@ public sealed class TerminalSession : IDisposable
 
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            await process.StandardInput.WriteLineAsync("$global:ProgressPreference='SilentlyContinue'; if ($PSStyle) { $PSStyle.OutputRendering='PlainText' }; [Console]::OutputEncoding=[Text.UTF8Encoding]::new()").ConfigureAwait(false);
+            await process.StandardInput.WriteLineAsync("$global:ProgressPreference='SilentlyContinue'; if ($PSStyle) { $PSStyle.OutputRendering='Ansi' }; [Console]::InputEncoding=[Text.UTF8Encoding]::new(); [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $global:OutputEncoding=[Text.UTF8Encoding]::new()").ConfigureAwait(false);
             await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
             Emit(TerminalStream.System, $"Terminal gestart met {executable}.");
         }
@@ -103,7 +107,9 @@ public sealed class TerminalSession : IDisposable
             throw new InvalidOperationException("PowerShell-terminal is niet beschikbaar.");
 
         Emit(TerminalStream.Input, $"PS> {command}");
-        await process.StandardInput.WriteLineAsync(command).ConfigureAwait(false);
+        var encoded = PowerShellProcess.EncodeCommand(command);
+        var invocation = $". ([ScriptBlock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{encoded}'))))";
+        await process.StandardInput.WriteLineAsync(invocation).ConfigureAwait(false);
         await process.StandardInput.FlushAsync().ConfigureAwait(false);
     }
 
@@ -168,6 +174,7 @@ public sealed class TerminalSession : IDisposable
                 WorkingDirectory = Directory.Exists(workingDirectory) ? workingDirectory : Environment.CurrentDirectory
             }
         };
+        ConfigureTerminalEnvironment(process.StartInfo);
         process.StartInfo.ArgumentList.Add("-NoLogo");
         process.StartInfo.ArgumentList.Add("-NoProfile");
         process.StartInfo.ArgumentList.Add("-NonInteractive");
@@ -292,6 +299,12 @@ public sealed class TerminalSession : IDisposable
         }
     }
 
+    private static void ConfigureTerminalEnvironment(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment["TERM"] = "xterm-256color";
+        startInfo.Environment["COLORTERM"] = "truecolor";
+    }
+
     private const string ParameterRunner = """
         [CmdletBinding()]
         param(
@@ -301,7 +314,10 @@ public sealed class TerminalSession : IDisposable
 
         Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
+        if ($PSStyle) { $PSStyle.OutputRendering = 'Ansi' }
+        [Console]::InputEncoding = [Text.UTF8Encoding]::new()
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+        $global:OutputEncoding = [Text.UTF8Encoding]::new()
         $parameters = Get-Content -Raw -LiteralPath $ParametersPath | ConvertFrom-Json -AsHashtable
         & $ScriptPath @parameters
         """;

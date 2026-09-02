@@ -25,6 +25,22 @@ public sealed class ThemeService
         ["Warning"] = "#FFB547", ["Danger"] = "#FF5D6C", ["Neutral"] = "#6F7B8A", ["OnAccent"] = "#15181D"
     };
 
+    private static readonly IReadOnlyDictionary<string, string> AnsiDark = new Dictionary<string, string>
+    {
+        ["AnsiBlack"] = "#9EA7B3", ["AnsiRed"] = "#FF5D6C", ["AnsiGreen"] = "#32C48D", ["AnsiYellow"] = "#FFB547",
+        ["AnsiBlue"] = "#82AAFF", ["AnsiMagenta"] = "#D9A7FF", ["AnsiCyan"] = "#70D6FF", ["AnsiWhite"] = "#F1F4F6",
+        ["AnsiBrightBlack"] = "#6F7B8A", ["AnsiBrightRed"] = "#FF8A96", ["AnsiBrightGreen"] = "#6EDCB1", ["AnsiBrightYellow"] = "#FFD166",
+        ["AnsiBrightBlue"] = "#A9C7FF", ["AnsiBrightMagenta"] = "#E7C4FF", ["AnsiBrightCyan"] = "#A7E8FF", ["AnsiBrightWhite"] = "#FFFFFF"
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> AnsiLight = new Dictionary<string, string>
+    {
+        ["AnsiBlack"] = "#17202A", ["AnsiRed"] = "#C6283D", ["AnsiGreen"] = "#247A3D", ["AnsiYellow"] = "#8A5700",
+        ["AnsiBlue"] = "#3659A9", ["AnsiMagenta"] = "#7A3E9D", ["AnsiCyan"] = "#006A8A", ["AnsiWhite"] = "#5B6572",
+        ["AnsiBrightBlack"] = "#687380", ["AnsiBrightRed"] = "#B00020", ["AnsiBrightGreen"] = "#146B2F", ["AnsiBrightYellow"] = "#704800",
+        ["AnsiBrightBlue"] = "#234A91", ["AnsiBrightMagenta"] = "#682D8A", ["AnsiBrightCyan"] = "#005B75", ["AnsiBrightWhite"] = "#17202A"
+    };
+
     public AppTheme CurrentTheme { get; private set; } = AppTheme.Dark;
     public EditorPalette CurrentPalette { get; private set; } = EditorPalette.Forge;
     public event EventHandler? ThemeChanged;
@@ -34,9 +50,10 @@ public sealed class ThemeService
         CurrentTheme = theme;
         CurrentPalette = palette;
         var colors = theme == AppTheme.Dark ? Dark : Light;
+        var ansiColors = theme == AppTheme.Dark ? AnsiDark : AnsiLight;
         var resources = Application.Current.Resources;
 
-        foreach (var (name, value) in colors.Concat(Shared))
+        foreach (var (name, value) in colors.Concat(Shared).Concat(ansiColors))
             resources[$"{name}Brush"] = new SolidColorBrush(Parse(value));
 
         resources["CrtScanlineBrush"] = new SolidColorBrush(Parse(
